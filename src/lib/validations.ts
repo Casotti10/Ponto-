@@ -28,6 +28,21 @@ export const timeEntrySchema = z.object({
 });
 export type TimeEntryInput = z.infer<typeof timeEntrySchema>;
 
+export const dayEntriesSchema = z
+  .object({
+    date: z.string().min(1, "Informe a data"),
+    ENTRADA: z.string().optional().or(z.literal("")),
+    SAIDA_ALMOCO: z.string().optional().or(z.literal("")),
+    RETORNO_ALMOCO: z.string().optional().or(z.literal("")),
+    SAIDA: z.string().optional().or(z.literal("")),
+    notes: z.string().max(500).optional().or(z.literal("")),
+  })
+  .refine((data) => [data.ENTRADA, data.SAIDA_ALMOCO, data.RETORNO_ALMOCO, data.SAIDA].some((t) => !!t), {
+    message: "Informe ao menos um horário",
+    path: ["ENTRADA"],
+  });
+export type DayEntriesInput = z.infer<typeof dayEntriesSchema>;
+
 export const absenceSchema = z.object({
   id: z.string().optional(),
   date: z.string().min(1, "Informe a data inicial"),

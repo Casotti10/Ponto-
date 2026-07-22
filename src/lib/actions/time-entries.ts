@@ -4,8 +4,10 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
-import { timeEntrySchema } from "@/lib/validations";
+import { timeEntrySchema, dayEntriesSchema } from "@/lib/validations";
 import type { EntryType } from "@prisma/client";
+
+const DAY_ENTRY_TYPES: EntryType[] = ["ENTRADA", "SAIDA_ALMOCO", "RETORNO_ALMOCO", "SAIDA"];
 
 export interface FormResult {
   success: boolean;
@@ -86,6 +88,65 @@ export async function createTimeEntry(formData: FormData): Promise<FormResult> {
     after: { type, time: dateTime.toISOString(), notes },
     reason: "Criação manual de registro",
   });
+
+  revalidatePath("/dashboard");
+  revalidatePath("/ponto");
+  revalidatePath("/calendario");
+  return { success: true };
+}
+
+export async function createTimeEntriesForDay(formData: FormData): Promise<FormResult> {
+  const user = await requireUser();
+  const parsed = dayEntriesSchema.safeParse({
+    date: formData.get("date"),
+    ENTRADA: formData.get("ENTRADA"),
+    SAIDA_ALMOCO: formData.get("SAIDA_ALMOCO"),
+    RETORNO_ALMOCO: formData.get("RETORNO_ALMOCO"),
+    SAIDA: formData.get("SAIDA"),
+    notes: formData.get("notes"),
+  });
+
+  if (!parsed.success) {
+    return { success: false, error: parsed.error.issues[0]?.message };
+  }
+
+  const { date, notes, ...times } = parsed.data;
+  const notesValue = notes || null;
+
+  const toCreate = DAY_ENTRY_TYPES.filter((type) => !!times[type]).map((type) => {
+    const { date: dateOnly, dateTime } = combineDateTime(date, times[type]!);
+    return { type, date: dateOnly, time: dateTime };
+  });
+
+  if (toCreate.length === 0) {
+    return { success: false, error: "Informe ao menos um horário" };
+  }
+
+  const created = await prisma.$transaction(
+    toCreate.map(({ type, date: dateOnly, time }) =>
+      prisma.timeEntry.create({
+        data: {
+          userId: user.id,
+          date: dateOnly,
+          type,
+          time,
+          notes: notesValue,
+          source: "MANUAL",
+        },
+      })
+    )
+  );
+
+  for (const entry of created) {
+    await logAudit({
+      userId: user.id,
+      entity: "TIME_ENTRY",
+      entityId: entry.id,
+      action: "CREATE",
+      after: { type: entry.type, time: entry.time.toISOString(), notes: notesValue },
+      reason: "Criação manual de registro (dia completo)",
+    });
+  }
 
   revalidatePath("/dashboard");
   revalidatePath("/ponto");

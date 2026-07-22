@@ -8,7 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { createTimeEntry, updateTimeEntry } from "@/lib/actions/time-entries";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { createTimeEntry, updateTimeEntry, createTimeEntriesForDay } from "@/lib/actions/time-entries";
 import { format } from "date-fns";
 
 const TYPE_LABELS: Record<string, string> = {
@@ -16,6 +17,15 @@ const TYPE_LABELS: Record<string, string> = {
   SAIDA_ALMOCO: "Saída para almoço",
   RETORNO_ALMOCO: "Retorno do almoço",
   SAIDA: "Saída",
+};
+
+const DAY_ENTRY_TYPES = ["ENTRADA", "SAIDA_ALMOCO", "RETORNO_ALMOCO", "SAIDA"] as const;
+
+const DAY_ENTRY_DEFAULTS: Record<(typeof DAY_ENTRY_TYPES)[number], string> = {
+  ENTRADA: "08:00",
+  SAIDA_ALMOCO: "12:00",
+  RETORNO_ALMOCO: "13:00",
+  SAIDA: "18:00",
 };
 
 export interface TimeEntryFormValues {
@@ -36,12 +46,13 @@ interface Props {
 export function TimeEntryFormDialog({ trigger, initialValues, open: openProp, onOpenChange }: Props) {
   const [openState, setOpenState] = useState(false);
   const [pending, startTransition] = useTransition();
+  const [mode, setMode] = useState<"single" | "day">("single");
   const isEdit = !!initialValues?.id;
 
   const open = openProp ?? openState;
   const setOpen = onOpenChange ?? setOpenState;
 
-  function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+  function handleSingleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
     startTransition(async () => {
@@ -58,69 +69,140 @@ export function TimeEntryFormDialog({ trigger, initialValues, open: openProp, on
     });
   }
 
+  function handleDaySubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const formData = new FormData(e.currentTarget);
+    startTransition(async () => {
+      const result = await createTimeEntriesForDay(formData);
+      if (result.success) {
+        toast.success("Registros do dia criados com sucesso");
+        setOpen(false);
+      } else {
+        toast.error(result.error ?? "Não foi possível salvar os registros");
+      }
+    });
+  }
+
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       {trigger && <DialogTrigger render={trigger} />}
       <DialogContent className="sm:max-w-md">
-        <form onSubmit={handleSubmit}>
-          <DialogHeader>
-            <DialogTitle>{isEdit ? "Editar registro" : "Novo registro de ponto"}</DialogTitle>
-            <DialogDescription>
-              Preencha a data, horário e tipo do registro. Você pode adicionar observações opcionais.
-            </DialogDescription>
-          </DialogHeader>
+        <DialogHeader>
+          <DialogTitle>{isEdit ? "Editar registro" : "Novo registro de ponto"}</DialogTitle>
+          <DialogDescription>
+            {isEdit
+              ? "Ajuste a data, horário e tipo do registro."
+              : mode === "single"
+                ? "Preencha a data, horário e tipo do registro."
+                : "Preencha os horários do dia todo de uma vez. Deixe em branco o que não se aplica."}
+          </DialogDescription>
+        </DialogHeader>
 
-          <div className="grid grid-cols-2 gap-4 py-4">
-            <div className="space-y-2">
-              <Label htmlFor="date">Data</Label>
-              <Input
-                id="date"
-                name="date"
-                type="date"
-                required
-                defaultValue={initialValues?.date ?? format(new Date(), "yyyy-MM-dd")}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="time">Horário</Label>
-              <Input
-                id="time"
-                name="time"
-                type="time"
-                required
-                defaultValue={initialValues?.time ?? format(new Date(), "HH:mm")}
-              />
-            </div>
-            <div className="col-span-2 space-y-2">
-              <Label htmlFor="type">Tipo de registro</Label>
-              <Select name="type" items={TYPE_LABELS} defaultValue={initialValues?.type ?? "ENTRADA"} required>
-                <SelectTrigger id="type" className="w-full">
-                  <SelectValue placeholder="Selecione o tipo" />
-                </SelectTrigger>
-                <SelectContent>
-                  {Object.entries(TYPE_LABELS).map(([value, label]) => (
-                    <SelectItem key={value} value={value}>
-                      {label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="col-span-2 space-y-2">
-              <Label htmlFor="notes">Observações (opcional)</Label>
-              <Textarea id="notes" name="notes" placeholder="Ex: atraso justificado por trânsito" defaultValue={initialValues?.notes ?? ""} />
-            </div>
-          </div>
+        {!isEdit && (
+          <Tabs value={mode} onValueChange={(v) => setMode(v as "single" | "day")}>
+            <TabsList className="w-full">
+              <TabsTrigger value="single" className="flex-1">
+                Registro único
+              </TabsTrigger>
+              <TabsTrigger value="day" className="flex-1">
+                Dia completo
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+        )}
 
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setOpen(false)}>
-              Cancelar
-            </Button>
-            <Button type="submit" disabled={pending}>
-              {pending ? "Salvando..." : "Salvar"}
-            </Button>
-          </DialogFooter>
-        </form>
+        {(isEdit || mode === "single") && (
+          <form onSubmit={handleSingleSubmit}>
+            <div className="grid grid-cols-2 gap-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="date">Data</Label>
+                <Input
+                  id="date"
+                  name="date"
+                  type="date"
+                  required
+                  defaultValue={initialValues?.date ?? format(new Date(), "yyyy-MM-dd")}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="time">Horário</Label>
+                <Input
+                  id="time"
+                  name="time"
+                  type="time"
+                  required
+                  defaultValue={initialValues?.time ?? format(new Date(), "HH:mm")}
+                />
+              </div>
+              <div className="col-span-2 space-y-2">
+                <Label htmlFor="type">Tipo de registro</Label>
+                <Select name="type" items={TYPE_LABELS} defaultValue={initialValues?.type ?? "ENTRADA"} required>
+                  <SelectTrigger id="type" className="w-full">
+                    <SelectValue placeholder="Selecione o tipo" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(TYPE_LABELS).map(([value, label]) => (
+                      <SelectItem key={value} value={value}>
+                        {label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="col-span-2 space-y-2">
+                <Label htmlFor="notes">Observações (opcional)</Label>
+                <Textarea id="notes" name="notes" placeholder="Ex: atraso justificado por trânsito" defaultValue={initialValues?.notes ?? ""} />
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+                Cancelar
+              </Button>
+              <Button type="submit" disabled={pending}>
+                {pending ? "Salvando..." : "Salvar"}
+              </Button>
+            </DialogFooter>
+          </form>
+        )}
+
+        {!isEdit && mode === "day" && (
+          <form onSubmit={handleDaySubmit}>
+            <div className="grid grid-cols-2 gap-4 py-4">
+              <div className="col-span-2 space-y-2">
+                <Label htmlFor="day-date">Data</Label>
+                <Input id="day-date" name="date" type="date" required defaultValue={format(new Date(), "yyyy-MM-dd")} />
+              </div>
+              {DAY_ENTRY_TYPES.map((type) => (
+                <div key={type} className="space-y-2">
+                  <Label htmlFor={`day-${type}`}>{TYPE_LABELS[type]}</Label>
+                  <Input id={`day-${type}`} name={type} type="time" defaultValue={DAY_ENTRY_DEFAULTS[type]} />
+                </div>
+              ))}
+              <div className="col-span-2 space-y-2">
+                <Label htmlFor="day-notes">Observações (opcional)</Label>
+                <Textarea
+                  id="day-notes"
+                  name="notes"
+                  placeholder="Aplicada a todos os registros criados"
+                  defaultValue=""
+                />
+              </div>
+              <p className="col-span-2 text-xs text-muted-foreground">
+                Limpe o campo de horário para não criar aquele registro.
+              </p>
+            </div>
+
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+                Cancelar
+              </Button>
+              <Button type="submit" disabled={pending}>
+                {pending ? "Salvando..." : "Salvar dia completo"}
+              </Button>
+            </DialogFooter>
+          </form>
+        )}
       </DialogContent>
     </Dialog>
   );
