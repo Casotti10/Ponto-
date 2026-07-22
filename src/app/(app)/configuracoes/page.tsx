@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { WorkScheduleForm } from "@/components/settings/work-schedule-form";
 import { GoalsManager } from "@/components/settings/goals-manager";
+import { ProfileFormDialog } from "@/components/settings/profile-form-dialog";
 
 const roleLabels: Record<string, string> = {
   ADMIN: "Administrador",
@@ -43,17 +44,20 @@ export default async function ConfiguracoesPage() {
             <UserCircle className="h-4 w-4" /> Perfil
           </CardTitle>
         </CardHeader>
-        <CardContent className="flex items-center gap-4">
-          <Avatar className="h-14 w-14">
-            <AvatarFallback style={{ backgroundColor: user.avatarColor, color: "white" }} className="text-lg font-semibold">
-              {initials}
-            </AvatarFallback>
-          </Avatar>
-          <div>
-            <p className="font-medium">{user.name}</p>
-            <p className="text-sm text-muted-foreground">{user.email}</p>
-            <p className="text-xs text-muted-foreground">{roleLabels[user.role] ?? user.role}</p>
+        <CardContent className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <Avatar className="h-14 w-14">
+              <AvatarFallback style={{ backgroundColor: user.avatarColor, color: "white" }} className="text-lg font-semibold">
+                {initials}
+              </AvatarFallback>
+            </Avatar>
+            <div>
+              <p className="font-medium">{user.name}</p>
+              <p className="text-sm text-muted-foreground">{user.email}</p>
+              <p className="text-xs text-muted-foreground">{roleLabels[user.role] ?? user.role}</p>
+            </div>
           </div>
+          <ProfileFormDialog name={user.name} />
         </CardContent>
       </Card>
 

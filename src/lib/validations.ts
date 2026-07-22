@@ -19,6 +19,11 @@ export const registerSchema = z
   });
 export type RegisterInput = z.infer<typeof registerSchema>;
 
+export const profileSchema = z.object({
+  name: z.string().min(2, "Informe seu nome completo").max(120),
+});
+export type ProfileInput = z.infer<typeof profileSchema>;
+
 export const timeEntrySchema = z.object({
   id: z.string().optional(),
   date: z.string().min(1, "Informe a data"),

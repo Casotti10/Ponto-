@@ -4,8 +4,33 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
-import { workScheduleSchema, goalSchema } from "@/lib/validations";
+import { workScheduleSchema, goalSchema, profileSchema } from "@/lib/validations";
 import type { FormResult } from "@/lib/actions/time-entries";
+
+export async function updateProfile(formData: FormData): Promise<FormResult> {
+  const user = await requireUser();
+  const parsed = profileSchema.safeParse({ name: formData.get("name") });
+
+  if (!parsed.success) {
+    return { success: false, error: parsed.error.issues[0]?.message };
+  }
+
+  const existing = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+  const updated = await prisma.user.update({ where: { id: user.id }, data: { name: parsed.data.name } });
+
+  await logAudit({
+    userId: user.id,
+    entity: "USER",
+    entityId: user.id,
+    action: "UPDATE",
+    before: { name: existing.name },
+    after: { name: updated.name },
+    reason: "Atualização do nome de exibição",
+  });
+
+  revalidatePath("/", "layout");
+  return { success: true };
+}
 
 export async function updateWorkSchedule(formData: FormData): Promise<FormResult> {
   const user = await requireUser();

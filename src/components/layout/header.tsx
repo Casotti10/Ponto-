@@ -7,6 +7,7 @@ import { Sheet, SheetContent, SheetTrigger, SheetTitle } from "@/components/ui/s
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -69,24 +70,30 @@ export function Header({ user, notifications, title }: HeaderProps) {
             <span className="hidden text-sm font-medium md:block">{user.name}</span>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
-            <DropdownMenuLabel>
-              <p className="truncate">{user.name}</p>
-              <p className="truncate text-xs font-normal text-muted-foreground">{user.email}</p>
-              <p className="mt-1 text-xs font-normal text-muted-foreground">{roleLabels[user.role] ?? user.role}</p>
-            </DropdownMenuLabel>
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>
+                <p className="truncate">{user.name}</p>
+                <p className="truncate text-xs font-normal text-muted-foreground">{user.email}</p>
+                <p className="mt-1 text-xs font-normal text-muted-foreground">{roleLabels[user.role] ?? user.role}</p>
+              </DropdownMenuLabel>
+            </DropdownMenuGroup>
             <DropdownMenuSeparator />
-            <DropdownMenuItem render={<a href="/configuracoes" />}>
-              <UserIcon className="mr-2 h-4 w-4" /> Meu perfil
-            </DropdownMenuItem>
+            <DropdownMenuGroup>
+              <DropdownMenuItem render={<a href="/configuracoes" />}>
+                <UserIcon className="mr-2 h-4 w-4" /> Meu perfil
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
             <DropdownMenuSeparator />
-            <DropdownMenuItem
-              variant="destructive"
-              onClick={() => {
-                void logoutAction();
-              }}
-            >
-              <LogOut className="mr-2 h-4 w-4" /> Sair
-            </DropdownMenuItem>
+            <DropdownMenuGroup>
+              <DropdownMenuItem
+                variant="destructive"
+                onClick={() => {
+                  void logoutAction();
+                }}
+              >
+                <LogOut className="mr-2 h-4 w-4" /> Sair
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
