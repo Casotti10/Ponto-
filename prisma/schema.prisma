@@ -1,0 +1,214 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  MANAGER
+  EMPLOYEE
+}
+
+enum EntryType {
+  ENTRADA
+  SAIDA_ALMOCO
+  RETORNO_ALMOCO
+  SAIDA
+}
+
+enum EntrySource {
+  MANUAL
+  PONTO_RAPIDO
+  IMPORTACAO
+  AJUSTE
+}
+
+enum AbsenceType {
+  FALTA_JUSTIFICADA
+  FALTA_INJUSTIFICADA
+  BANCO_HORAS
+  FOLGA
+  FERIAS
+  LICENCA
+  COMPENSACAO
+  HOME_OFFICE
+}
+
+enum AbsenceImpact {
+  NEUTRO // não afeta o saldo (ex: férias, licença) - não gera déficit
+  DESCONTA // desconta a jornada prevista do saldo (falta injustificada)
+  ABATE_BANCO // consome horas do banco de horas (banco de horas / compensação)
+  NAO_DESCONTA // falta justificada: não desconta e não soma
+}
+
+enum AdjustmentType {
+  MANUAL_ADD
+  MANUAL_REMOVE
+  FECHAMENTO_MENSAL
+  CORRECAO
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  ADJUST
+  CLOSE_MONTH
+}
+
+enum AuditEntity {
+  TIME_ENTRY
+  ABSENCE
+  BALANCE_ADJUSTMENT
+  WORK_SCHEDULE
+  USER
+  GOAL
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(EMPLOYEE)
+  active       Boolean  @default(true)
+  avatarColor  String   @default("#6366f1")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  timeEntries         TimeEntry[]
+  absences            Absence[]
+  balanceAdjustments  BalanceAdjustment[]
+  workSchedule        WorkSchedule?
+  auditLogs           AuditLog[]
+  goals               Goal[]
+  monthlyClosures     MonthlyClosure[]
+  notifications       Notification[]
+
+  @@index([email])
+}
+
+model WorkSchedule {
+  id                   String   @id @default(cuid())
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId               String   @unique
+  dailyHours           Float    @default(8) // jornada diária em horas
+  weeklyHours          Float    @default(40) // carga semanal
+  lunchBreakMinutes    Int      @default(60) // intervalo obrigatório em minutos
+  toleranceMinutes     Int      @default(10) // tolerância de atraso
+  workDays             Int[]    @default([1, 2, 3, 4, 5]) // 0=domingo ... 6=sábado
+  entryTime            String   @default("08:00") // horário previsto de entrada HH:mm
+  lunchOutTime         String   @default("12:00")
+  lunchReturnTime      String   @default("13:00")
+  exitTime             String   @default("17:00")
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+}
+
+model TimeEntry {
+  id          String      @id @default(cuid())
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      String
+  date        DateTime    // dia do registro à meia-noite local (sem @db.Date: ver nota de timezone)
+  type        EntryType
+  time        DateTime // data+hora completa do evento
+  notes       String?
+  source      EntrySource @default(MANUAL)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@index([userId, date])
+  @@index([userId, type, date])
+}
+
+model Absence {
+  id          String        @id @default(cuid())
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      String
+  date        DateTime
+  endDate     DateTime?     // para intervalos (férias/licença)
+  type        AbsenceType
+  impact      AbsenceImpact
+  hours       Float? // horas específicas abatidas/creditadas quando aplicável
+  reason      String?
+  approved    Boolean       @default(true)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([userId, date])
+  @@index([userId, type])
+}
+
+model BalanceAdjustment {
+  id        String         @id @default(cuid())
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  date      DateTime       @default(now())
+  minutes   Int // positivo = crédito, negativo = débito
+  type      AdjustmentType
+  reason    String
+  createdAt DateTime       @default(now())
+
+  @@index([userId, date])
+}
+
+model MonthlyClosure {
+  id            String   @id @default(cuid())
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId        String
+  year          Int
+  month         Int // 1-12
+  balanceMinutes Int // saldo acumulado ao final do mês (em minutos)
+  workedMinutes Int
+  expectedMinutes Int
+  extraMinutes  Int
+  negativeMinutes Int
+  closedAt      DateTime @default(now())
+
+  @@unique([userId, year, month])
+}
+
+model Goal {
+  id         String   @id @default(cuid())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId     String
+  title      String
+  targetHours Float
+  year       Int
+  month      Int
+  createdAt  DateTime @default(now())
+
+  @@index([userId, year, month])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  title     String
+  message   String
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, read])
+}
+
+model AuditLog {
+  id         String      @id @default(cuid())
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId     String
+  entity     AuditEntity
+  entityId   String
+  action     AuditAction
+  before     Json?
+  after      Json?
+  reason     String?
+  createdAt  DateTime    @default(now())
+
+  @@index([userId, createdAt])
+  @@index([entity, entityId])
+}

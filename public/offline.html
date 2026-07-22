@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ponto+ · Offline</title>
+    <style>
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        background: #f9f9f7;
+        color: #0b0b0b;
+      }
+      @media (prefers-color-scheme: dark) {
+        body { background: #0d0d0d; color: #ffffff; }
+      }
+      .card {
+        text-align: center;
+        padding: 2rem;
+        max-width: 380px;
+      }
+      .icon {
+        width: 56px;
+        height: 56px;
+        border-radius: 16px;
+        background: linear-gradient(135deg, #6366f1, #10b981);
+        margin: 0 auto 1rem;
+      }
+      h1 { font-size: 1.25rem; margin: 0 0 0.5rem; }
+      p { color: #898781; font-size: 0.9rem; }
+      button {
+        margin-top: 1.5rem;
+        padding: 0.6rem 1.2rem;
+        border-radius: 8px;
+        border: none;
+        background: #4f46e5;
+        color: white;
+        font-size: 0.9rem;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="icon"></div>
+      <h1>Você está offline</h1>
+      <p>Não foi possível conectar ao Ponto+. Verifique sua conexão e tente novamente.</p>
+      <button onclick="location.reload()">Tentar novamente</button>
+    </div>
+  </body>
+</html>
