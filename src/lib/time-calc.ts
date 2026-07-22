@@ -225,13 +225,15 @@ export function computeDayResult({
       };
     }
     // dia útil passado sem nenhum registro nem ausência cadastrada
+    // Não gera saldo negativo: apenas o excedente diário acima da jornada
+    // reduz/soma o banco de horas (dias sem registro ficam neutros no saldo).
     return {
       isScheduledWorkday,
       expectedMinutes: expectedMinutesBase,
       workedMinutes: 0,
       extraMinutes: 0,
       negativeMinutes: expectedMinutesBase,
-      balanceDeltaMinutes: -expectedMinutesBase,
+      balanceDeltaMinutes: 0,
       status: "FALTA_NAO_REGISTRADA",
       openEntry: false,
     };
@@ -252,7 +254,9 @@ export function computeDayResult({
 
   const extraMinutes = Math.max(0, workedMinutes - expectedMinutesBase);
   const negativeMinutes = isToday && openEntry ? 0 : Math.max(0, expectedMinutesBase - workedMinutes);
-  const balanceDeltaMinutes = isToday && openEntry ? 0 : workedMinutes - expectedMinutesBase;
+  // O banco de horas só é abatido pelo excedente diário acima da jornada prevista;
+  // trabalhar menos que a jornada não gera saldo negativo (apenas fica "incompleto").
+  const balanceDeltaMinutes = isToday && openEntry ? 0 : extraMinutes;
 
   let status: DayStatus = "COMPLETO";
   if (isToday && openEntry) status = "EM_ANDAMENTO";
