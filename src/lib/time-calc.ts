@@ -177,14 +177,14 @@ export function computeDayResult({
       }
       case "BANCO_HORAS":
       case "COMPENSACAO": {
-        const usedMinutes = Math.round((absence.hours ?? schedule.dailyHours) * 60);
+        // Dia justificado: neutro no banco de horas (não gera saldo positivo nem negativo).
         return {
           isScheduledWorkday,
           expectedMinutes: expectedMinutesBase,
           workedMinutes: 0,
           extraMinutes: 0,
           negativeMinutes: 0,
-          balanceDeltaMinutes: -usedMinutes,
+          balanceDeltaMinutes: 0,
           status: absence.type,
           absenceType: absence.type,
           openEntry: false,
@@ -224,16 +224,15 @@ export function computeDayResult({
         openEntry: false,
       };
     }
-    // dia útil passado sem nenhum registro nem ausência cadastrada
-    // Não gera saldo negativo: apenas o excedente diário acima da jornada
-    // reduz/soma o banco de horas (dias sem registro ficam neutros no saldo).
+    // dia útil passado sem nenhum registro nem ausência cadastrada:
+    // gera -8h00 (jornada completa) no banco de horas.
     return {
       isScheduledWorkday,
       expectedMinutes: expectedMinutesBase,
       workedMinutes: 0,
       extraMinutes: 0,
       negativeMinutes: expectedMinutesBase,
-      balanceDeltaMinutes: 0,
+      balanceDeltaMinutes: -expectedMinutesBase,
       status: "FALTA_NAO_REGISTRADA",
       openEntry: false,
     };
@@ -254,9 +253,11 @@ export function computeDayResult({
 
   const extraMinutes = Math.max(0, workedMinutes - expectedMinutesBase);
   const negativeMinutes = isToday && openEntry ? 0 : Math.max(0, expectedMinutesBase - workedMinutes);
-  // O banco de horas só é abatido pelo excedente diário acima da jornada prevista;
-  // trabalhar menos que a jornada não gera saldo negativo (apenas fica "incompleto").
-  const balanceDeltaMinutes = isToday && openEntry ? 0 : extraMinutes;
+  // Saldo do dia = trabalhado - jornada prevista (pode ser negativo). O excedente
+  // acima da jornada abate primeiro um saldo negativo existente e só depois que ele
+  // zerar passa a acumular como saldo positivo — isso é uma propriedade natural da
+  // soma corrida dos saldos diários, sem necessidade de lógica extra aqui.
+  const balanceDeltaMinutes = isToday && openEntry ? 0 : workedMinutes - expectedMinutesBase;
 
   let status: DayStatus = "COMPLETO";
   if (isToday && openEntry) status = "EM_ANDAMENTO";
