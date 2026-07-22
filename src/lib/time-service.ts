@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import {
   computeDayResult,
   type DayResult,
@@ -26,13 +27,22 @@ const DEFAULT_SCHEDULE: WorkScheduleLike = {
 };
 
 export async function getOrCreateWorkSchedule(userId: string) {
-  let schedule = await prisma.workSchedule.findUnique({ where: { userId } });
-  if (!schedule) {
-    schedule = await prisma.workSchedule.create({
-      data: { userId, ...DEFAULT_SCHEDULE },
+  // A dashboard dispara múltiplas chamadas em paralelo para o mesmo usuário
+  // recém-criado (sem WorkSchedule ainda). Mesmo com upsert, duas transações
+  // concorrentes podem colidir na criação (P2002) — nesse caso, a que perdeu
+  // a corrida apenas busca a linha que a outra acabou de inserir.
+  try {
+    return await prisma.workSchedule.upsert({
+      where: { userId },
+      create: { userId, ...DEFAULT_SCHEDULE },
+      update: {},
     });
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      return prisma.workSchedule.findUniqueOrThrow({ where: { userId } });
+    }
+    throw err;
   }
-  return schedule;
 }
 
 function dateKey(d: Date) {

@@ -2,8 +2,9 @@
 
 import { useActionState } from "react";
 import Link from "next/link";
-import { Clock } from "lucide-react";
-import { loginAction, type ActionState } from "@/lib/actions/auth";
+import { UserPlus } from "lucide-react";
+import { registerAction } from "@/lib/actions/auth";
+import type { ActionState } from "@/lib/actions/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,8 +12,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 
 const initialState: ActionState = {};
 
-export default function LoginPage() {
-  const [state, formAction, pending] = useActionState(loginAction, initialState);
+export default function CadastroPage() {
+  const [state, formAction, pending] = useActionState(registerAction, initialState);
 
   return (
     <div className="relative flex min-h-screen w-full items-center justify-center overflow-hidden bg-gradient-to-br from-indigo-50 via-white to-emerald-50 px-4 dark:from-neutral-950 dark:via-neutral-950 dark:to-neutral-900">
@@ -22,20 +23,28 @@ export default function LoginPage() {
       <Card className="relative w-full max-w-sm border-border/60 shadow-xl backdrop-blur animate-in fade-in zoom-in-95 duration-500">
         <CardHeader className="items-center text-center">
           <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-emerald-500 text-white shadow-lg shadow-indigo-500/30">
-            <Clock className="h-6 w-6" />
+            <UserPlus className="h-6 w-6" />
           </div>
-          <CardTitle className="text-xl">Ponto+</CardTitle>
-          <CardDescription>Controle de ponto e banco de horas</CardDescription>
+          <CardTitle className="text-xl">Criar conta</CardTitle>
+          <CardDescription>Cadastre-se no Ponto+ para começar a registrar seu ponto</CardDescription>
         </CardHeader>
         <CardContent>
           <form action={formAction} className="space-y-4">
             <div className="space-y-2">
+              <Label htmlFor="name">Nome completo</Label>
+              <Input id="name" name="name" placeholder="Seu nome" required autoFocus />
+            </div>
+            <div className="space-y-2">
               <Label htmlFor="email">E-mail</Label>
-              <Input id="email" name="email" type="email" placeholder="voce@empresa.com" required autoFocus />
+              <Input id="email" name="email" type="email" placeholder="voce@empresa.com" required />
             </div>
             <div className="space-y-2">
               <Label htmlFor="password">Senha</Label>
-              <Input id="password" name="password" type="password" placeholder="••••••••" required />
+              <Input id="password" name="password" type="password" placeholder="Mínimo 6 caracteres" required minLength={6} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="confirmPassword">Confirmar senha</Label>
+              <Input id="confirmPassword" name="confirmPassword" type="password" placeholder="••••••••" required minLength={6} />
             </div>
 
             {state.error && (
@@ -45,28 +54,18 @@ export default function LoginPage() {
             )}
 
             <Button type="submit" className="w-full" disabled={pending}>
-              {pending ? "Entrando..." : "Entrar"}
+              {pending ? "Criando conta..." : "Criar conta"}
             </Button>
           </form>
 
-          <p className="mt-4 text-center text-sm text-muted-foreground">
-            Não tem uma conta?{" "}
-            <Link href="/cadastro" className="font-medium text-primary hover:underline">
-              Cadastrar
+          <p className="mt-6 text-center text-sm text-muted-foreground">
+            Já tem uma conta?{" "}
+            <Link href="/login" className="font-medium text-primary hover:underline">
+              Entrar
             </Link>
           </p>
-
-          <div className="mt-6 rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">
-            <p className="font-medium text-foreground">Contas de demonstração</p>
-            <p className="mt-1">admin@empresa.com / senha123</p>
-            <p>colaborador@empresa.com / senha123</p>
-          </div>
         </CardContent>
       </Card>
-
-      <Link href="/" className="sr-only">
-        Início
-      </Link>
     </div>
   );
 }
