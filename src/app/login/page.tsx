@@ -58,8 +58,7 @@ export default function LoginPage() {
 
           <div className="mt-6 rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">
             <p className="font-medium text-foreground">Contas de demonstração</p>
-            <p className="mt-1">admin@empresa.com / senha123</p>
-            <p>colaborador@empresa.com / senha123</p>
+            <p className="mt-1">colaborador@empresa.com / senha123</p>
           </div>
         </CardContent>
       </Card>
