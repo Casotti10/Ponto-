@@ -1,4 +1,4 @@
-import { Settings, Clock, Target, UserCircle } from "lucide-react";
+import { Settings, Clock, Target, UserCircle, Lock } from "lucide-react";
 import { requireUser } from "@/lib/auth";
 import { getOrCreateWorkSchedule } from "@/lib/time-service";
 import { prisma } from "@/lib/prisma";
@@ -7,6 +7,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { WorkScheduleForm } from "@/components/settings/work-schedule-form";
 import { GoalsManager } from "@/components/settings/goals-manager";
 import { ProfileFormDialog } from "@/components/settings/profile-form-dialog";
+import { ChangePasswordForm } from "@/components/settings/change-password-form";
 
 const roleLabels: Record<string, string> = {
   ADMIN: "Administrador",
@@ -58,6 +59,18 @@ export default async function ConfiguracoesPage() {
             </div>
           </div>
           <ProfileFormDialog name={user.name} />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Lock className="h-4 w-4" /> Segurança
+          </CardTitle>
+          <CardDescription>Altere sua senha para manter sua conta segura.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ChangePasswordForm />
         </CardContent>
       </Card>
 

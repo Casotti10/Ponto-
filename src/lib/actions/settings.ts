@@ -1,10 +1,11 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
-import { workScheduleSchema, goalSchema, profileSchema } from "@/lib/validations";
+import { workScheduleSchema, goalSchema, profileSchema, changePasswordSchema } from "@/lib/validations";
 import type { FormResult } from "@/lib/actions/time-entries";
 
 export async function updateProfile(formData: FormData): Promise<FormResult> {
@@ -103,5 +104,76 @@ export async function deleteGoal(id: string): Promise<FormResult> {
 
   revalidatePath("/dashboard");
   revalidatePath("/configuracoes");
+  return { success: true };
+}
+
+export interface ChangePasswordState {
+  success?: boolean;
+  error?: string;
+}
+
+/**
+ * Altera a senha do usuário autenticado.
+ *
+ * Validações:
+ * 1. Senha atual deve estar correta
+ * 2. Nova senha deve atender aos requisitos de segurança
+ * 3. Nova senha não pode ser igual à anterior
+ * 4. Confirmação deve ser igual à nova senha
+ */
+export async function changePassword(
+  _prevState: ChangePasswordState,
+  formData: FormData
+): Promise<ChangePasswordState> {
+  const user = await requireUser();
+
+  const parsed = changePasswordSchema.safeParse({
+    currentPassword: formData.get("currentPassword"),
+    newPassword: formData.get("newPassword"),
+    confirmPassword: formData.get("confirmPassword"),
+  });
+
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message };
+  }
+
+  // Obter usuário atual do banco
+  const userWithPassword = await prisma.user.findUnique({
+    where: { id: user.id },
+    select: { passwordHash: true },
+  });
+
+  if (!userWithPassword) {
+    return { error: "Usuário não encontrado" };
+  }
+
+  // Verificar se a senha atual está correta
+  const passwordMatch = await bcrypt.compare(parsed.data.currentPassword, userWithPassword.passwordHash);
+
+  if (!passwordMatch) {
+    return { error: "Senha atual incorreta" };
+  }
+
+  // Hash da nova senha
+  const newPasswordHash = await bcrypt.hash(parsed.data.newPassword, 10);
+
+  // Atualizar senha no banco
+  const updated = await prisma.user.update({
+    where: { id: user.id },
+    data: { passwordHash: newPasswordHash },
+  });
+
+  // Registrar na auditoria
+  await logAudit({
+    userId: user.id,
+    entity: "USER",
+    entityId: user.id,
+    action: "UPDATE",
+    before: { hasPassword: true },
+    after: { hasPassword: true },
+    reason: "Alteração de senha",
+  });
+
+  revalidatePath("/", "layout");
   return { success: true };
 }

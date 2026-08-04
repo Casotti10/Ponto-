@@ -59,6 +59,29 @@ export const profileSchema = z.object({
 });
 export type ProfileInput = z.infer<typeof profileSchema>;
 
+/**
+ * Schema para alteração de senha.
+ * Valida:
+ * 1. Senha atual (deve existir e ser válida)
+ * 2. Nova senha (deve ser forte)
+ * 3. Confirmação (deve ser igual à nova)
+ */
+export const changePasswordSchema = z
+  .object({
+    currentPassword: z.string().min(1, "Informe sua senha atual"),
+    newPassword: strongPasswordSchema,
+    confirmPassword: z.string().min(1, "Confirme a nova senha"),
+  })
+  .refine((data) => data.newPassword === data.confirmPassword, {
+    message: "As novas senhas não coincidem",
+    path: ["confirmPassword"],
+  })
+  .refine((data) => data.currentPassword !== data.newPassword, {
+    message: "A nova senha não pode ser igual à senha atual",
+    path: ["newPassword"],
+  });
+export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
+
 export const timeEntrySchema = z.object({
   id: z.string().optional(),
   date: z.string().min(1, "Informe a data"),
