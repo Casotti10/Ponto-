@@ -4,13 +4,18 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  // Conexao com pool (PgBouncer) — usada pela aplicacao em runtime.
+  // Unica variavel exigida pelo schema. Em runtime ela e a conexao COM pool
+  // (PgBouncer, no Neon), que e o que se quer num ambiente serverless.
+  //
+  // As migrations precisam de conexao SEM pool — operacoes de schema dependem
+  // de sessao e de prepared statements que o pooler nao preserva. Em vez de
+  // declarar `directUrl` aqui, o buildCommand do vercel.json sobrescreve
+  // DATABASE_URL so na chamada do `prisma migrate deploy`.
+  //
+  // O motivo e concreto: `directUrl = env("X")` faz o Prisma abortar com P1012
+  // se X nao existir, mesmo quando nao ha migration a aplicar. Resolver a
+  // conexao direta no shell mantem o schema com uma dependencia so.
   url      = env("DATABASE_URL")
-  // Conexao direta, sem pool — usada apenas pelo Prisma CLI (`migrate deploy`,
-  // `migrate dev`, `db push`). Operacoes de schema nao funcionam sobre PgBouncer,
-  // porque dependem de sessao e de prepared statements que o pool nao preserva.
-  // No Vercel + Neon essa variavel ja vem pronta pela integracao.
-  directUrl = env("DATABASE_URL_UNPOOLED")
 }
 
 enum Role {
