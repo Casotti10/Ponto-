@@ -75,7 +75,7 @@ export default function LoginPage() {
           <AnimatedBrazilianFlag />
         </div>
         <p className="font-mono text-[11px] tracking-wide text-muted-foreground/70">
-          feita por @lucascasotti
+          feito por @lucascasotti
         </p>
       </div>
     </div>
