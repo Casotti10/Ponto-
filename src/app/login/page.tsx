@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { AnimatedBrazilianFlag } from "@/components/animated-flag";
 
 const initialState: ActionState = {};
 
@@ -67,11 +68,16 @@ export default function LoginPage() {
         Início
       </Link>
 
-      {/* Assinatura do autor. `pointer-events-none` para nao capturar clique
+      {/* Assinatura do autor com flag animada. `pointer-events-none` para nao capturar clique
           sobre o cartao em telas baixas, onde os dois se aproximam. */}
-      <p className="pointer-events-none absolute bottom-4 right-4 font-mono text-[11px] tracking-wide text-muted-foreground/70">
-        Desenvolvido por Lucas Casotti
-      </p>
+      <div className="pointer-events-none absolute bottom-4 right-4 flex flex-col items-end gap-2">
+        <div className="h-6 w-8 overflow-hidden rounded opacity-80 hover:opacity-100 transition-opacity">
+          <AnimatedBrazilianFlag />
+        </div>
+        <p className="font-mono text-[11px] tracking-wide text-muted-foreground/70">
+          feita por @lucascasotti
+        </p>
+      </div>
     </div>
   );
 }
