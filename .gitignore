@@ -33,6 +33,9 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# Excecao: o .env.example so tem placeholders e documenta as variaveis
+# necessarias para rodar o projeto. Nunca colocar valor real aqui.
+!.env.example
 
 # vercel
 .vercel

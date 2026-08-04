@@ -4,7 +4,13 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+  // Conexao com pool (PgBouncer) — usada pela aplicacao em runtime.
   url      = env("DATABASE_URL")
+  // Conexao direta, sem pool — usada apenas pelo Prisma CLI (`migrate deploy`,
+  // `migrate dev`, `db push`). Operacoes de schema nao funcionam sobre PgBouncer,
+  // porque dependem de sessao e de prepared statements que o pool nao preserva.
+  // No Vercel + Neon essa variavel ja vem pronta pela integracao.
+  directUrl = env("DATABASE_URL_UNPOOLED")
 }
 
 enum Role {
