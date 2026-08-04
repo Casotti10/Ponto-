@@ -49,10 +49,18 @@ export default async function FinanceiroPage({
   const accountId = params.accountId || null;
 
   const overview = await getLedgerOverviewFiltered(user.id, year, month, accountId, now);
-  const { totals, transactions, accounts, categories, recurrences } = overview;
+  const { totals, transactions, accounts, allAccounts, categories, recurrences } = overview;
 
+  // ✅ CORRIGIDO: Use allAccounts para o manager (sempre tem todas)
+  // e accounts (filtradas) apenas para cálculos de totalCash
+  const accountsForManager = allAccounts || accounts; // Fallback para compatibilidade
   const activeAccounts = accounts.filter((a) => !a.archived);
   const accountOptions = activeAccounts.map((a) => ({ id: a.id, name: a.name }));
+
+  // ✅ CRÍTICO: Agora totalCash respeita o filtro!
+  // Se há filtro: soma apenas a conta filtrada
+  // Se não há filtro: soma todas as contas (accounts === allAccounts)
+  const totalCash = activeAccounts.reduce((acc, a) => acc + a.balanceCents, 0);
 
   const cashflowData: CashflowPoint[] = overview.dailyFlow.map((point) => ({
     day: point.day,
@@ -83,7 +91,6 @@ export default async function FinanceiroPage({
     ]),
   };
 
-  const totalCash = activeAccounts.reduce((acc, a) => acc + a.balanceCents, 0);
   const isPositive = totals.balanceCents >= 0;
 
   // Calcular comparação com mês anterior

@@ -146,7 +146,10 @@ export interface LedgerOverview {
   dailyFlow: DailyFlowPoint[];
   expensesByCategory: CategoryBreakdownItem[];
   incomeByCategory: CategoryBreakdownItem[];
+  /** Contas usadas nos cálculos: filtradas se accountId foi fornecido, senão todas. */
   accounts: AccountBalance[];
+  /** ✅ NOVO: Sempre retorna TODAS as contas, independentemente do filtro. Usado para AccountsManager. */
+  allAccounts?: AccountBalance[];
   categories: { id: string; name: string; type: "ENTRADA" | "SAIDA"; color: string }[];
   recurrences: {
     id: string;
@@ -315,8 +318,11 @@ export async function getLedgerOverview(
  * - Transações são filtradas apenas dessa conta
  * - Gráficos mostram apenas dados dessa conta
  * - Saldos iniciais e finais são apenas dessa conta
+ * - RETORNA APENAS A CONTA FILTRADA no array `accounts`
  *
  * Quando accountId é null, comporta-se como getLedgerOverview (todas as contas).
+ *
+ * IMPORTANTE: Todos os cálculos (cards, gráficos, totais) respeitam o filtro.
  */
 export async function getLedgerOverviewFiltered(
   userId: string,
@@ -351,6 +357,10 @@ export async function getLedgerOverviewFiltered(
   // Filtrar recorrências dessa conta
   const filteredRecurrences = overview.recurrences.filter((r) => r.accountId === accountId);
 
+  // ✅ CRÍTICO: Retornar APENAS a conta filtrada, não todas as contas
+  // Assim, quando a página calcular `totalCash`, só somará essa conta
+  const filteredAccounts = account ? [account] : [];
+
   return {
     ...overview,
     totals: filteredTotals,
@@ -360,6 +370,8 @@ export async function getLedgerOverviewFiltered(
     dailyFlow: filteredDailyFlow,
     expensesByCategory: filteredExpensesByCategory,
     incomeByCategory: filteredIncomeByCategory,
+    accounts: filteredAccounts, // ✅ Apenas a conta filtrada! Usada para cálculos
+    allAccounts: overview.accounts, // ✅ NOVO: Todas as contas para exibição (AccountsManager)
     recurrences: filteredRecurrences,
   };
 }
