@@ -22,6 +22,10 @@ const ENTITY_LABELS: Record<AuditEntity, string> = {
   WORK_SCHEDULE: "Jornada de trabalho",
   USER: "Usuário",
   GOAL: "Meta",
+  TRANSACTION: "Lançamento financeiro",
+  ACCOUNT: "Conta",
+  CATEGORY: "Categoria",
+  RECURRING_TRANSACTION: "Lançamento recorrente",
 };
 
 export default async function HistoricoPage() {

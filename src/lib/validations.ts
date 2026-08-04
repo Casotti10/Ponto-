@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parseAmountToCents } from "@/lib/ledger-calc";
 
 export const loginSchema = z.object({
   email: z.string().email("Informe um e-mail válido"),
@@ -94,6 +95,67 @@ export const goalSchema = z.object({
   month: z.coerce.number().min(1).max(12),
 });
 export type GoalInput = z.infer<typeof goalSchema>;
+
+/* ----------------------- Razão financeiro (entradas/saídas) ---------------- */
+
+/**
+ * O valor chega como texto do formulário ("1.234,56") e é convertido para
+ * centavos inteiros. A conversão vive em `ledger-calc` para que a mesma regra
+ * valha no cliente (preview) e no servidor (gravação).
+ */
+const amountCents = z.string().min(1, "Informe o valor").transform((value, ctx) => {
+  const cents = parseAmountToCents(value);
+  if (cents === null || cents <= 0) {
+    ctx.addIssue({ code: "custom", message: "Informe um valor válido maior que zero" });
+    return z.NEVER;
+  }
+  return cents;
+});
+
+export const transactionSchema = z.object({
+  id: z.string().optional(),
+  date: z.string().min(1, "Informe a data"),
+  description: z.string().min(1, "Informe a descrição").max(200),
+  amount: amountCents,
+  type: z.enum(["ENTRADA", "SAIDA"]),
+  accountId: z.string().min(1, "Selecione a conta"),
+  categoryId: z.string().optional().or(z.literal("")),
+  notes: z.string().max(500).optional().or(z.literal("")),
+});
+export type TransactionInput = z.infer<typeof transactionSchema>;
+
+export const accountSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().min(1, "Informe o nome da conta").max(60),
+  type: z.enum(["CORRENTE", "POUPANCA", "CARTEIRA", "CARTAO", "INVESTIMENTO"]),
+  openingBalance: z.string().optional().or(z.literal("")),
+  color: z.string().min(4).max(9),
+});
+export type AccountInput = z.infer<typeof accountSchema>;
+
+export const categorySchema = z.object({
+  id: z.string().optional(),
+  name: z.string().min(1, "Informe o nome da categoria").max(60),
+  type: z.enum(["ENTRADA", "SAIDA"]),
+  color: z.string().min(4).max(9),
+});
+export type CategoryInput = z.infer<typeof categorySchema>;
+
+export const recurringTransactionSchema = z.object({
+  id: z.string().optional(),
+  description: z.string().min(1, "Informe a descrição").max(200),
+  amount: amountCents,
+  type: z.enum(["ENTRADA", "SAIDA"]),
+  accountId: z.string().min(1, "Selecione a conta"),
+  categoryId: z.string().optional().or(z.literal("")),
+  frequency: z.enum(["MENSAL", "SEMANAL", "ANUAL"]),
+  dayOfMonth: z.coerce.number().int().min(1).max(31),
+  weekday: z.coerce.number().int().min(0).max(6),
+  monthOfYear: z.coerce.number().int().min(1).max(12),
+  startDate: z.string().min(1, "Informe a data de início"),
+  endDate: z.string().optional().or(z.literal("")),
+});
+export type RecurringTransactionInput = z.infer<typeof recurringTransactionSchema>;
 
 export const reportRangeSchema = z.object({
   start: z.string().min(1),

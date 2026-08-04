@@ -51,35 +51,36 @@ export function buildReportRows(
   }));
 }
 
-export function exportToCsv(rows: ReportRow[], filename: string) {
-  const headers = ["Data", "Status", "Trabalhado", "Previsto", "Extra", "Negativo", "Saldo"];
-  const lines = [
-    headers.join(";"),
-    ...rows.map((r) => [r.date, r.status, r.worked, r.expected, r.extra, r.negative, r.balance].join(";")),
-  ];
+/**
+ * Tabela genérica de exportação.
+ *
+ * Toda exportação do sistema (ponto e financeiro) é reduzida a cabeçalhos +
+ * linhas de texto já formatadas; assim existe UMA implementação de CSV, Excel e
+ * PDF, e um novo relatório só precisa fornecer os dados.
+ */
+export interface ExportTable {
+  headers: string[];
+  rows: string[][];
+  /** Nome da aba no Excel. */
+  sheetName?: string;
+}
+
+export function exportTableToCsv(table: ExportTable, filename: string) {
+  const lines = [table.headers.join(";"), ...table.rows.map((row) => row.join(";"))];
+  // BOM inicial: sem ele o Excel em pt-BR abre os acentos quebrados.
   const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8;" });
   downloadBlob(blob, `${filename}.csv`);
 }
 
-export async function exportToExcel(rows: ReportRow[], filename: string) {
+export async function exportTableToExcel(table: ExportTable, filename: string) {
   const XLSX = await import("xlsx");
-  const worksheet = XLSX.utils.json_to_sheet(
-    rows.map((r) => ({
-      Data: r.date,
-      Status: r.status,
-      Trabalhado: r.worked,
-      Previsto: r.expected,
-      Extra: r.extra,
-      Negativo: r.negative,
-      Saldo: r.balance,
-    }))
-  );
+  const worksheet = XLSX.utils.aoa_to_sheet([table.headers, ...table.rows]);
   const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, "Relatório");
+  XLSX.utils.book_append_sheet(workbook, worksheet, table.sheetName ?? "Relatório");
   XLSX.writeFile(workbook, `${filename}.xlsx`);
 }
 
-export async function exportToPdf(rows: ReportRow[], filename: string, title: string) {
+export async function exportTableToPdf(table: ExportTable, filename: string, title: string) {
   const { default: jsPDF } = await import("jspdf");
   const autoTable = (await import("jspdf-autotable")).default;
 
@@ -92,13 +93,34 @@ export async function exportToPdf(rows: ReportRow[], filename: string, title: st
 
   autoTable(doc, {
     startY: 28,
-    head: [["Data", "Status", "Trabalhado", "Previsto", "Extra", "Negativo", "Saldo"]],
-    body: rows.map((r) => [r.date, r.status, r.worked, r.expected, r.extra, r.negative, r.balance]),
+    head: [table.headers],
+    body: table.rows,
     styles: { fontSize: 8 },
     headStyles: { fillColor: [42, 120, 214] },
   });
 
   doc.save(`${filename}.pdf`);
+}
+
+const REPORT_HEADERS = ["Data", "Status", "Trabalhado", "Previsto", "Extra", "Negativo", "Saldo"];
+
+function reportTable(rows: ReportRow[]): ExportTable {
+  return {
+    headers: REPORT_HEADERS,
+    rows: rows.map((r) => [r.date, r.status, r.worked, r.expected, r.extra, r.negative, r.balance]),
+  };
+}
+
+export function exportToCsv(rows: ReportRow[], filename: string) {
+  exportTableToCsv(reportTable(rows), filename);
+}
+
+export async function exportToExcel(rows: ReportRow[], filename: string) {
+  await exportTableToExcel(reportTable(rows), filename);
+}
+
+export async function exportToPdf(rows: ReportRow[], filename: string, title: string) {
+  await exportTableToPdf(reportTable(rows), filename, title);
 }
 
 function downloadBlob(blob: Blob, filename: string) {

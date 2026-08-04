@@ -67,6 +67,34 @@ enum AuditEntity {
   WORK_SCHEDULE
   USER
   GOAL
+  TRANSACTION
+  ACCOUNT
+  CATEGORY
+  RECURRING_TRANSACTION
+}
+
+// ---------------------------------------------------------------------------
+// Módulo financeiro: razão de entradas e saídas.
+// Independente do controle de ponto — nenhum modelo abaixo lê ou altera horas.
+// ---------------------------------------------------------------------------
+
+enum TransactionType {
+  ENTRADA // dinheiro que entra
+  SAIDA // dinheiro que sai
+}
+
+enum AccountType {
+  CORRENTE
+  POUPANCA
+  CARTEIRA // dinheiro em espécie
+  CARTAO // cartão de crédito
+  INVESTIMENTO
+}
+
+enum RecurrenceFrequency {
+  MENSAL
+  SEMANAL
+  ANUAL
 }
 
 model User {
@@ -88,6 +116,10 @@ model User {
   goals               Goal[]
   monthlyClosures     MonthlyClosure[]
   notifications       Notification[]
+  accounts            Account[]
+  categories          Category[]
+  transactions        Transaction[]
+  recurringTransactions RecurringTransaction[]
 
   @@index([email])
 }
@@ -195,6 +227,119 @@ model Notification {
   createdAt DateTime @default(now())
 
   @@index([userId, read])
+}
+
+/// Conta ou carteira onde o dinheiro fica (Nubank, Itaú, espécie, cartão...).
+/// O saldo NÃO é armazenado: é sempre `openingBalanceCents` + soma dos
+/// lançamentos. Guardar saldo denormalizado abriria espaço para divergência
+/// entre o total e o extrato — e o extrato é a verdade.
+model Account {
+  id                  String      @id @default(cuid())
+  user                User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId              String
+  name                String
+  type                AccountType @default(CORRENTE)
+  /// Saldo que a conta já tinha antes do primeiro lançamento registrado aqui.
+  openingBalanceCents Int         @default(0)
+  color               String      @default("#2a78d6")
+  archived            Boolean     @default(false)
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+
+  transactions          Transaction[]
+  recurringTransactions RecurringTransaction[]
+
+  @@unique([userId, name])
+  @@index([userId, archived])
+}
+
+/// Categoria de um lançamento. Pertence a UM tipo (entrada ou saída) para que
+/// o formulário só ofereça categorias compatíveis com o que está sendo lançado.
+model Category {
+  id        String          @id @default(cuid())
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  name      String
+  type      TransactionType
+  color     String          @default("#898781")
+  archived  Boolean         @default(false)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  transactions          Transaction[]
+  recurringTransactions RecurringTransaction[]
+
+  @@unique([userId, name, type])
+  @@index([userId, type])
+}
+
+/// Um lançamento do razão.
+///
+/// `amountCents` é SEMPRE positivo — o sinal vem de `type`. Guardar em centavos
+/// (Int) evita erro de ponto flutuante em dinheiro e segue o padrão que o resto
+/// do sistema já usa para minutos.
+model Transaction {
+  id          String          @id @default(cuid())
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      String
+  account     Account         @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  accountId   String
+  category    Category?       @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  categoryId  String?
+  date        DateTime // dia do lançamento à meia-noite local
+  description String
+  amountCents Int
+  type        TransactionType
+  notes       String?
+
+  /// Preenchido quando o lançamento nasceu de uma recorrência.
+  recurring   RecurringTransaction? @relation(fields: [recurringId], references: [id], onDelete: SetNull)
+  recurringId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Garante que a materialização das recorrências seja idempotente: a mesma
+  /// recorrência não pode gerar dois lançamentos para a mesma data.
+  @@unique([recurringId, date])
+  @@index([userId, date])
+  @@index([userId, type, date])
+  @@index([accountId, date])
+  @@index([categoryId])
+}
+
+/// Modelo de lançamento que se repete (aluguel, salário, assinatura).
+/// Não é um lançamento: é a receita para gerar lançamentos reais mês a mês.
+model RecurringTransaction {
+  id          String              @id @default(cuid())
+  user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      String
+  account     Account             @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  accountId   String
+  category    Category?           @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  categoryId  String?
+  description String
+  amountCents Int
+  type        TransactionType
+  frequency   RecurrenceFrequency @default(MENSAL)
+
+  /// MENSAL e ANUAL: dia do mês (1-31, ajustado para o último dia em meses curtos).
+  dayOfMonth Int @default(1)
+  /// SEMANAL: 0=domingo ... 6=sábado.
+  weekday    Int @default(1)
+  /// ANUAL: mês de referência (1-12).
+  monthOfYear Int @default(1)
+
+  startDate DateTime
+  endDate   DateTime?
+  active    Boolean   @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  transactions Transaction[]
+
+  @@index([userId, active])
 }
 
 model AuditLog {
