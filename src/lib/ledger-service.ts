@@ -307,3 +307,59 @@ export async function getLedgerOverview(
     yearSeries,
   };
 }
+
+/**
+ * Mesmo que getLedgerOverview, mas filtrando por conta específica se `accountId` for fornecido.
+ *
+ * Quando accountId é fornecido:
+ * - Transações são filtradas apenas dessa conta
+ * - Gráficos mostram apenas dados dessa conta
+ * - Saldos iniciais e finais são apenas dessa conta
+ *
+ * Quando accountId é null, comporta-se como getLedgerOverview (todas as contas).
+ */
+export async function getLedgerOverviewFiltered(
+  userId: string,
+  year: number,
+  month: number,
+  accountId: string | null,
+  referenceDate: Date = new Date()
+): Promise<LedgerOverview> {
+  const overview = await getLedgerOverview(userId, year, month, referenceDate);
+
+  if (!accountId) {
+    return overview;
+  }
+
+  // Filtrar transações pela conta
+  const filteredTransactions = overview.transactions.filter((tx) => tx.accountId === accountId);
+
+  // Recalcular totais baseado nas transações filtradas
+  const filteredTotals = summarizeTransactions(filteredTransactions);
+
+  // Calcular saldo inicial apenas dessa conta
+  const account = overview.accounts.find((a) => a.id === accountId);
+  const accountOpeningBalance = account?.balanceCents ?? 0;
+
+  // Recalcular fluxo diário
+  const filteredDailyFlow = buildDailyFlow(filteredTransactions, year, month, accountOpeningBalance);
+
+  // Recalcular breakdown por categoria
+  const filteredExpensesByCategory = breakdownByCategory(filteredTransactions, overview.categories, "SAIDA");
+  const filteredIncomeByCategory = breakdownByCategory(filteredTransactions, overview.categories, "ENTRADA");
+
+  // Filtrar recorrências dessa conta
+  const filteredRecurrences = overview.recurrences.filter((r) => r.accountId === accountId);
+
+  return {
+    ...overview,
+    totals: filteredTotals,
+    openingCents: accountOpeningBalance,
+    closingCents: accountOpeningBalance + filteredTotals.balanceCents,
+    transactions: filteredTransactions,
+    dailyFlow: filteredDailyFlow,
+    expensesByCategory: filteredExpensesByCategory,
+    incomeByCategory: filteredIncomeByCategory,
+    recurrences: filteredRecurrences,
+  };
+}

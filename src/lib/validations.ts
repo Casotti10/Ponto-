@@ -7,17 +7,51 @@ export const loginSchema = z.object({
 });
 export type LoginInput = z.infer<typeof loginSchema>;
 
+/**
+ * Regras de senha forte, aplicadas no cadastro.
+ *
+ * O piso de 8 caracteres com quatro classes distintas segue a recomendacao
+ * do NIST SP 800-63B para quando nao ha verificacao contra listas de senhas
+ * vazadas. O limite superior de 72 nao e estetico: o bcrypt TRUNCA em 72
+ * bytes, entao aceitar mais criaria a ilusao de uma senha mais forte do que
+ * a que seria de fato verificada.
+ *
+ * Cada regra e uma mensagem separada para que o usuario saiba exatamente o
+ * que falta, em vez de receber um "senha invalida" generico.
+ */
+export const strongPasswordSchema = z
+  .string()
+  .min(8, "A senha deve ter pelo menos 8 caracteres")
+  .max(72, "A senha deve ter no máximo 72 caracteres")
+  .regex(/[a-z]/, "A senha deve conter ao menos uma letra minúscula")
+  .regex(/[A-Z]/, "A senha deve conter ao menos uma letra maiúscula")
+  .regex(/[0-9]/, "A senha deve conter ao menos um número")
+  .regex(/[^A-Za-z0-9]/, "A senha deve conter ao menos um caractere especial");
+
 export const registerSchema = z
   .object({
     name: z.string().min(2, "Informe seu nome completo").max(120),
     email: z.string().email("Informe um e-mail válido"),
-    password: z.string().min(6, "A senha deve ter pelo menos 6 caracteres"),
+    password: strongPasswordSchema,
     confirmPassword: z.string().min(1, "Confirme a senha"),
   })
   .refine((data) => data.password === data.confirmPassword, {
     message: "As senhas não coincidem",
     path: ["confirmPassword"],
-  });
+  })
+  // A senha nao pode conter o nome nem o usuario do e-mail: sao os dois
+  // palpites mais obvios de quem conhece a pessoa.
+  .refine(
+    (data) => {
+      const senha = data.password.toLowerCase();
+      const usuario = data.email.split("@")[0]?.toLowerCase() ?? "";
+      const nome = data.name.trim().toLowerCase().split(/\s+/)[0] ?? "";
+      if (usuario.length >= 4 && senha.includes(usuario)) return false;
+      if (nome.length >= 4 && senha.includes(nome)) return false;
+      return true;
+    },
+    { message: "A senha não pode conter seu nome ou e-mail", path: ["password"] }
+  );
 export type RegisterInput = z.infer<typeof registerSchema>;
 
 export const profileSchema = z.object({

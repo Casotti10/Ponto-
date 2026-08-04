@@ -13,7 +13,7 @@ import {
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { requireUser } from "@/lib/auth";
-import { getLedgerOverview } from "@/lib/ledger-service";
+import { getLedgerOverviewFiltered } from "@/lib/ledger-service";
 import { centsToBRL, centsToSignedBRL, MONTH_NAMES } from "@/lib/ledger-calc";
 import { ledgerColors } from "@/lib/chart-colors";
 import { cn } from "@/lib/utils";
@@ -22,6 +22,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { LedgerPeriodPicker } from "@/components/ledger/ledger-period-picker";
+import { AccountFilter } from "@/components/ledger/account-filter";
+import { MonthlySummary } from "@/components/ledger/monthly-summary";
 import { TransactionFormDialog } from "@/components/ledger/transaction-form-dialog";
 import { TransactionRowActions } from "@/components/ledger/transaction-row-actions";
 import { CashflowChart, type CashflowPoint } from "@/components/ledger/cashflow-chart";
@@ -36,7 +38,7 @@ import type { ExportTable } from "@/lib/export-utils";
 export default async function FinanceiroPage({
   searchParams,
 }: {
-  searchParams: Promise<{ year?: string; month?: string }>;
+  searchParams: Promise<{ year?: string; month?: string; accountId?: string }>;
 }) {
   const user = await requireUser();
   const params = await searchParams;
@@ -44,8 +46,9 @@ export default async function FinanceiroPage({
 
   const year = Number(params.year) || now.getFullYear();
   const month = Math.min(12, Math.max(1, Number(params.month) || now.getMonth() + 1));
+  const accountId = params.accountId || null;
 
-  const overview = await getLedgerOverview(user.id, year, month, now);
+  const overview = await getLedgerOverviewFiltered(user.id, year, month, accountId, now);
   const { totals, transactions, accounts, categories, recurrences } = overview;
 
   const activeAccounts = accounts.filter((a) => !a.archived);
@@ -83,6 +86,22 @@ export default async function FinanceiroPage({
   const totalCash = activeAccounts.reduce((acc, a) => acc + a.balanceCents, 0);
   const isPositive = totals.balanceCents >= 0;
 
+  // Calcular comparação com mês anterior
+  const previousMonth = month === 1 ? 12 : month - 1;
+  const previousYear = month === 1 ? year - 1 : year;
+  const previousMonthOverview = await getLedgerOverviewFiltered(
+    user.id,
+    previousYear,
+    previousMonth,
+    accountId,
+    now
+  );
+  const previousMonthBalance = previousMonthOverview.totals.balanceCents;
+
+  // Determinar conta selecionada para exibição
+  const selectedAccount = accountId ? accounts.find((a) => a.id === accountId) : null;
+  const accountLabel = selectedAccount ? `${selectedAccount.name}` : "Todos os bancos";
+
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -91,10 +110,11 @@ export default async function FinanceiroPage({
             <Wallet className="h-6 w-6" /> Financeiro
           </h1>
           <p className="text-muted-foreground">
-            Suas entradas e saídas de {MONTH_NAMES[month - 1].toLowerCase()}.
+            Suas entradas e saídas de {MONTH_NAMES[month - 1].toLowerCase()} {accountId && `· ${accountLabel}`}.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <AccountFilter accounts={accounts} />
           <LedgerPeriodPicker
             year={year}
             month={month}
@@ -148,78 +168,77 @@ export default async function FinanceiroPage({
         />
       </div>
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-        <Card className="xl:col-span-2">
-          <CardHeader>
-            <CardTitle>Fluxo de caixa</CardTitle>
-            <CardDescription>
-              Entradas e saídas por dia, com o saldo acumulado partindo de{" "}
-              {centsToBRL(overview.openingCents)} — quanto você já tinha no começo do mês.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {transactions.length > 0 ? (
-              <CashflowChart data={cashflowData} />
-            ) : (
-              <p className="py-16 text-center text-sm text-muted-foreground">
-                Nenhum lançamento neste mês ainda.
-              </p>
-            )}
+      {transactions.length === 0 ? (
+        <Card className="border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950">
+          <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
+            <p className="text-sm font-medium text-amber-900 dark:text-amber-100">
+              Nenhum lançamento neste período
+            </p>
+            <p className="text-xs text-amber-800 dark:text-amber-200">
+              Selecione outro banco ou período, ou registre a primeira movimentação.
+            </p>
+            <TransactionFormDialog
+              accounts={accountOptions}
+              categories={categories}
+              trigger={<Button variant="outline" size="sm" className="gap-1.5 mt-2" />}
+            >
+              <Plus className="h-4 w-4" /> Novo lançamento
+            </TransactionFormDialog>
           </CardContent>
         </Card>
+      ) : (
+        <>
+          <MonthlySummary
+            totals={totals}
+            transactions={transactions}
+            openingCents={overview.openingCents}
+            closingCents={overview.closingCents}
+            previousMonthBalance={previousMonthBalance}
+          />
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Resumo de {MONTH_NAMES[month - 1]}</CardTitle>
-            <CardDescription>Como o mês fecha</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="divide-y">
-              <div className="flex items-center justify-between py-2 text-sm">
-                <span className="text-muted-foreground">Saldo inicial</span>
-                <span className="tabular-nums">{centsToBRL(overview.openingCents)}</span>
-              </div>
-              <div className="flex items-center justify-between py-2 text-sm">
-                <span className="text-muted-foreground">Entradas</span>
-                <span className="tabular-nums text-emerald-600 dark:text-emerald-400">
-                  +{centsToBRL(totals.incomeCents)}
-                </span>
-              </div>
-              <div className="flex items-center justify-between py-2 text-sm">
-                <span className="text-muted-foreground">Saídas</span>
-                <span className="tabular-nums text-red-600 dark:text-red-400">
-                  −{centsToBRL(totals.expenseCents)}
-                </span>
-              </div>
-              <div className="flex items-center justify-between py-2 text-sm font-semibold">
-                <span>Saldo do mês</span>
-                <span
-                  className={cn(
-                    "tabular-nums",
-                    isPositive ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"
-                  )}
-                >
-                  {centsToSignedBRL(totals.balanceCents)}
-                </span>
-              </div>
-              <div className="flex items-center justify-between py-2 text-sm font-semibold">
-                <span>Saldo final</span>
-                <span className="tabular-nums">{centsToBRL(overview.closingCents)}</span>
-              </div>
-            </div>
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+            <Card className="xl:col-span-2">
+              <CardHeader>
+                <CardTitle>Fluxo de caixa</CardTitle>
+                <CardDescription>
+                  Entradas e saídas por dia, com o saldo acumulado partindo de{" "}
+                  {centsToBRL(overview.openingCents)} — quanto você já tinha no começo do mês.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <CashflowChart data={cashflowData} />
+              </CardContent>
+            </Card>
 
-            {totals.biggestExpense && (
-              <div className="rounded-lg border p-3">
-                <p className="text-xs text-muted-foreground">Maior gasto do mês</p>
-                <p className="truncate text-sm font-medium">{totals.biggestExpense.description}</p>
-                <p className="text-sm tabular-nums text-red-600 dark:text-red-400">
-                  {centsToBRL(totals.biggestExpense.amountCents)}
-                </p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+            <Card>
+              <CardHeader>
+                <CardTitle>Maior gasto</CardTitle>
+                <CardDescription>Do mês selecionado</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {totals.biggestExpense ? (
+                  <div className="space-y-4">
+                    <div className="rounded-lg border p-3">
+                      <p className="text-xs text-muted-foreground">Descrição</p>
+                      <p className="truncate text-sm font-medium">{totals.biggestExpense.description}</p>
+                    </div>
+                    <div className="rounded-lg border p-3">
+                      <p className="text-xs text-muted-foreground">Valor</p>
+                      <p className="text-lg font-semibold text-red-600 dark:text-red-400">
+                        {centsToBRL(totals.biggestExpense.amountCents)}
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="py-8 text-center text-sm text-muted-foreground">
+                    Nenhuma saída neste período
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        </>
+      )}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card>
@@ -290,22 +309,21 @@ export default async function FinanceiroPage({
               </TransactionFormDialog>
             </div>
           ) : (
-            <div className="max-h-[560px] divide-y overflow-auto rounded-lg border">
+            <div className="max-h-140 divide-y overflow-auto rounded-lg border">
               {transactions.map((tx) => (
                 <div key={tx.id} className="flex items-center gap-3 p-3">
-                  <span
+                  <div
                     className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
                     style={{
-                      backgroundColor: `${tx.categoryColor ?? (tx.type === "ENTRADA" ? ledgerColors.light.income : ledgerColors.light.expense)}1a`,
-                      color: tx.categoryColor ?? (tx.type === "ENTRADA" ? ledgerColors.light.income : ledgerColors.light.expense),
+                      backgroundColor: `${tx.accountColor}20`,
+                      borderLeft: `3px solid ${tx.accountColor}`,
                     }}
                   >
-                    {tx.type === "ENTRADA" ? (
-                      <ArrowUpRight className="h-4 w-4" />
-                    ) : (
-                      <ArrowDownRight className="h-4 w-4" />
-                    )}
-                  </span>
+                    <span
+                      className="h-2 w-2 rounded-full"
+                      style={{ backgroundColor: tx.accountColor }}
+                    />
+                  </div>
 
                   <div className="min-w-0 flex-1">
                     <p className="flex items-center gap-2 truncate text-sm font-medium">
@@ -315,7 +333,8 @@ export default async function FinanceiroPage({
                       )}
                     </p>
                     <p className="truncate text-xs text-muted-foreground">
-                      {format(tx.date, "dd 'de' MMM", { locale: ptBR })} · {tx.accountName}
+                      {format(tx.date, "dd 'de' MMM", { locale: ptBR })}
+                      {!accountId && ` · ${tx.accountName}`}
                     </p>
                   </div>
 

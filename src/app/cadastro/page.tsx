@@ -1,8 +1,8 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import Link from "next/link";
-import { UserPlus } from "lucide-react";
+import { UserPlus, Check, X } from "lucide-react";
 import { registerAction } from "@/lib/actions/auth";
 import type { ActionState } from "@/lib/actions/auth";
 import { Button } from "@/components/ui/button";
@@ -12,8 +12,25 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 
 const initialState: ActionState = {};
 
+/**
+ * Espelha `strongPasswordSchema` de src/lib/validations.ts.
+ *
+ * Esta lista existe só para dar retorno enquanto a pessoa digita — quem decide
+ * de fato é o servidor, na Server Action. Ao mexer numa regra lá, ajuste aqui
+ * também, senão a tela promete uma coisa e o cadastro recusa outra.
+ */
+const PASSWORD_RULES = [
+  { label: "Pelo menos 8 caracteres", test: (v: string) => v.length >= 8 },
+  { label: "Uma letra minúscula", test: (v: string) => /[a-z]/.test(v) },
+  { label: "Uma letra maiúscula", test: (v: string) => /[A-Z]/.test(v) },
+  { label: "Um número", test: (v: string) => /[0-9]/.test(v) },
+  { label: "Um caractere especial", test: (v: string) => /[^A-Za-z0-9]/.test(v) },
+];
+
 export default function CadastroPage() {
   const [state, formAction, pending] = useActionState(registerAction, initialState);
+  const [password, setPassword] = useState("");
+  const atendidas = PASSWORD_RULES.filter((r) => r.test(password)).length;
 
   return (
     <div className="relative flex min-h-screen w-full items-center justify-center overflow-hidden bg-gradient-to-br from-indigo-50 via-white to-emerald-50 px-4 dark:from-neutral-950 dark:via-neutral-950 dark:to-neutral-900">
@@ -40,11 +57,67 @@ export default function CadastroPage() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="password">Senha</Label>
-              <Input id="password" name="password" type="password" placeholder="Mínimo 6 caracteres" required minLength={6} />
+              <Input
+                id="password"
+                name="password"
+                type="password"
+                placeholder="Crie uma senha forte"
+                required
+                minLength={8}
+                maxLength={72}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                aria-describedby="password-rules"
+              />
+
+              {/* A barra e a lista aparecem só depois da primeira tecla: mostrar
+                  cinco itens vermelhos num campo intocado acusa o usuário de um
+                  erro que ele ainda não cometeu. */}
+              {password.length > 0 && (
+                <div id="password-rules" className="space-y-2 pt-1 animate-in fade-in slide-in-from-top-1">
+                  <div className="flex gap-1" aria-hidden="true">
+                    {PASSWORD_RULES.map((_, i) => (
+                      <span
+                        key={i}
+                        className={
+                          "h-1 flex-1 rounded-full transition-colors " +
+                          (i < atendidas
+                            ? atendidas === PASSWORD_RULES.length
+                              ? "bg-emerald-500"
+                              : "bg-amber-500"
+                            : "bg-muted")
+                        }
+                      />
+                    ))}
+                  </div>
+                  <ul className="space-y-1">
+                    {PASSWORD_RULES.map((rule) => {
+                      const ok = rule.test(password);
+                      return (
+                        <li
+                          key={rule.label}
+                          className={
+                            "flex items-center gap-1.5 text-xs " +
+                            (ok ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground")
+                          }
+                        >
+                          {ok ? (
+                            <Check className="h-3 w-3 shrink-0" aria-hidden="true" />
+                          ) : (
+                            <X className="h-3 w-3 shrink-0" aria-hidden="true" />
+                          )}
+                          <span>{rule.label}</span>
+                          <span className="sr-only">{ok ? "— atendido" : "— pendente"}</span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="confirmPassword">Confirmar senha</Label>
-              <Input id="confirmPassword" name="confirmPassword" type="password" placeholder="••••••••" required minLength={6} />
+              <Input id="confirmPassword" name="confirmPassword" type="password" placeholder="Repita a senha" required minLength={8} maxLength={72} />
             </div>
 
             {state.error && (
