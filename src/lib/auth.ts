@@ -6,7 +6,30 @@ import { prisma } from "@/lib/prisma";
 import type { Role } from "@prisma/client";
 
 const SESSION_COOKIE = "ponto_session";
-const JWT_SECRET = process.env.JWT_SECRET ?? "dev-secret-change-in-production";
+
+/**
+ * Segredo que assina a sessao.
+ *
+ * Em producao NAO existe valor padrao, e a ausencia da variavel derruba o
+ * processo de proposito. O fallback de desenvolvimento e uma string publica
+ * (esta versionada neste repositorio): se ele valesse em producao, qualquer
+ * pessoa poderia assinar um cookie valido e entrar como qualquer usuario,
+ * inclusive ADMIN. Falhar alto no boot e preferivel a subir um app aberto.
+ */
+function resolveJwtSecret() {
+  const secret = process.env.JWT_SECRET;
+  if (secret) return secret;
+
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "JWT_SECRET nao definida. Configure a variavel de ambiente antes de subir em producao."
+    );
+  }
+
+  return "dev-secret-change-in-production";
+}
+
+const JWT_SECRET = resolveJwtSecret();
 const SESSION_DURATION_SECONDS = 60 * 60 * 24 * 30; // 30 dias
 
 export interface SessionPayload {
