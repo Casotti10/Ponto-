@@ -26,6 +26,9 @@ const ENTITY_LABELS: Record<AuditEntity, string> = {
   ACCOUNT: "Conta",
   CATEGORY: "Categoria",
   RECURRING_TRANSACTION: "Lançamento recorrente",
+  TASK_BOARD: "Quadro de tarefas",
+  TASK_COLUMN: "Coluna do quadro",
+  TASK_CARD: "Card de tarefa",
 };
 
 export default async function HistoricoPage() {

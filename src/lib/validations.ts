@@ -214,6 +214,66 @@ export const recurringTransactionSchema = z.object({
 });
 export type RecurringTransactionInput = z.infer<typeof recurringTransactionSchema>;
 
+/* --------------------------- Quadro de tarefas ---------------------------- */
+
+/**
+ * Cor em hexadecimal. O formulário só oferece a paleta validada, mas a action
+ * não pode confiar nisso — o valor chega por FormData e pode ser forjado.
+ */
+const hexColor = z
+  .string()
+  .regex(/^#[0-9a-fA-F]{6}$/, "Informe uma cor válida");
+
+export const taskPriorityEnum = z.enum(["BAIXA", "MEDIA", "ALTA", "URGENTE"]);
+
+export const boardSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().min(1, "Informe o nome do quadro").max(80),
+  description: z.string().max(300).optional().or(z.literal("")),
+});
+export type BoardInput = z.infer<typeof boardSchema>;
+
+export const boardColumnSchema = z.object({
+  id: z.string().optional(),
+  boardId: z.string().min(1),
+  name: z.string().min(1, "Informe o nome da coluna").max(60),
+  color: hexColor,
+  // Checkbox só envia valor quando marcado, por isso o default.
+  isDone: z.coerce.boolean().default(false),
+});
+export type BoardColumnInput = z.infer<typeof boardColumnSchema>;
+
+export const taskCardSchema = z.object({
+  id: z.string().optional(),
+  columnId: z.string().min(1, "Selecione a coluna"),
+  title: z.string().min(1, "Informe o título da tarefa").max(200),
+  description: z.string().max(500).optional().or(z.literal("")),
+  priority: taskPriorityEnum,
+  dueDate: z.string().optional().or(z.literal("")),
+  color: hexColor.optional().or(z.literal("")),
+  /** Ids separados por vírgula — é como o formulário serializa a seleção. */
+  labelIds: z.string().optional().or(z.literal("")),
+});
+export type TaskCardInput = z.infer<typeof taskCardSchema>;
+
+export const taskLabelSchema = z.object({
+  id: z.string().optional(),
+  boardId: z.string().min(1),
+  name: z.string().min(1, "Informe o nome da etiqueta").max(40),
+  color: hexColor,
+});
+export type TaskLabelInput = z.infer<typeof taskLabelSchema>;
+
+export const checklistItemSchema = z.object({
+  content: z.string().min(1, "Descreva o item").max(300),
+});
+
+export const cardNotesSchema = z.object({
+  // 20 mil caracteres é folgado para anotação de tarefa e ainda barra colar um
+  // arquivo inteiro no campo.
+  content: z.string().max(20000, "A anotação ficou longa demais"),
+});
+
 export const reportRangeSchema = z.object({
   start: z.string().min(1),
   end: z.string().min(1),
