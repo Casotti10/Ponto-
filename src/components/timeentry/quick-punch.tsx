@@ -6,6 +6,7 @@ import { LogIn, Coffee, LogOut, UtensilsCrossed, CheckCircle2 } from "lucide-rea
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { punchNow } from "@/lib/actions/time-entries";
+import { appClockString } from "@/lib/timezone";
 import type { EntryType } from "@prisma/client";
 import { cn } from "@/lib/utils";
 
@@ -18,12 +19,14 @@ const STEPS: { type: EntryType; label: string; icon: typeof LogIn }[] = [
 
 export function QuickPunch({ todayEntryTypes }: { todayEntryTypes: EntryType[] }) {
   const [pending, startTransition] = useTransition();
-  const [now, setNow] = useState<Date | null>(null);
+  // O relógio é a hora do fuso do app, não a do navegador: é exatamente o
+  // horário que o servidor vai gravar ao registrar a batida.
+  const [clock, setClock] = useState<string | null>(null);
   const nextIndex = todayEntryTypes.length;
   const isDone = nextIndex >= STEPS.length;
 
   useEffect(() => {
-    const tick = () => setNow(new Date());
+    const tick = () => setClock(appClockString());
     tick();
     const interval = setInterval(tick, 1000);
     return () => clearInterval(interval);
@@ -33,7 +36,7 @@ export function QuickPunch({ todayEntryTypes }: { todayEntryTypes: EntryType[] }
     startTransition(async () => {
       const result = await punchNow(type);
       if (result.success) {
-        toast.success(`${STEPS.find((s) => s.type === type)?.label} registrada às ${new Date().toLocaleTimeString("pt-BR")}`);
+        toast.success(`${STEPS.find((s) => s.type === type)?.label} registrada às ${appClockString()}`);
       } else {
         toast.error(result.error ?? "Não foi possível registrar o ponto");
       }
@@ -46,7 +49,7 @@ export function QuickPunch({ todayEntryTypes }: { todayEntryTypes: EntryType[] }
         <CardTitle className="flex items-center justify-between text-white">
           <span>Bater ponto</span>
           <span className="font-mono text-lg tabular-nums opacity-90">
-            {now ? now.toLocaleTimeString("pt-BR") : "--:--:--"}
+            {clock ?? "--:--:--"}
           </span>
         </CardTitle>
       </CardHeader>

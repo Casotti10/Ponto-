@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { SearchFilters } from "@/components/search/search-filters";
 import { ABSENCE_TYPE_LABELS } from "@/components/absences/absence-form-dialog";
 import { format, subMonths } from "date-fns";
+import { appNow } from "@/lib/timezone";
 import { ptBR } from "date-fns/locale";
 import type { EntryType, Prisma } from "@prisma/client";
 
@@ -36,7 +37,7 @@ export default async function PesquisaPage({
   const params = await searchParams;
   const q = params.q ?? "";
   const type = params.type ?? "all";
-  const now = new Date();
+  const now = appNow();
   const start = params.start ? new Date(`${params.start}T00:00:00`) : subMonths(now, 3);
   const end = params.end ? new Date(`${params.end}T23:59:59`) : now;
 

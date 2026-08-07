@@ -8,8 +8,9 @@ import { Button } from "@/components/ui/button";
 import { QuickPunch } from "@/components/timeentry/quick-punch";
 import { TimeEntryFormDialog } from "@/components/timeentry/time-entry-form-dialog";
 import { EntryRowActions } from "@/components/timeentry/entry-row-actions";
-import { format, subDays } from "date-fns";
+import { format, subDays, addDays } from "date-fns";
 import { ptBR } from "date-fns/locale";
+import { appNow, appToday } from "@/lib/timezone";
 import type { EntryType } from "@prisma/client";
 
 const TYPE_LABELS: Record<EntryType, string> = {
@@ -35,9 +36,12 @@ const SOURCE_LABELS: Record<string, string> = {
 
 export default async function PontoPage() {
   const user = await requireUser();
-  const now = new Date();
+  const now = appNow();
+  // Janela fechada no dia: `gte` sozinho deixaria um registro lançado para uma
+  // data futura contar como batida de hoje e adiantar a etapa do ponto rápido.
+  const todayStart = appToday();
   const todayEntries = await prisma.timeEntry.findMany({
-    where: { userId: user.id, date: { gte: new Date(now.getFullYear(), now.getMonth(), now.getDate()) } },
+    where: { userId: user.id, date: { gte: todayStart, lt: addDays(todayStart, 1) } },
     orderBy: { time: "asc" },
   });
 

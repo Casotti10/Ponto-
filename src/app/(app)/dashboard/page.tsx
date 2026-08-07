@@ -12,6 +12,7 @@ import {
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { getDashboardData, getBalanceTrend } from "@/lib/time-service";
+import { appNow } from "@/lib/timezone";
 import { minutesToHM } from "@/lib/time-calc";
 import { StatCard } from "@/components/dashboard/stat-card";
 import { QuickPunch } from "@/components/timeentry/quick-punch";
@@ -28,7 +29,7 @@ const monthNames = [
 
 export default async function DashboardPage() {
   const user = await requireUser();
-  const now = new Date();
+  const now = appNow();
 
   const [dashboard, trend, goals] = await Promise.all([
     getDashboardData(user.id, now),

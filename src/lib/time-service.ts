@@ -17,6 +17,7 @@ import {
   endOfYear,
   format,
 } from "date-fns";
+import { appNow, appToday } from "@/lib/timezone";
 
 const DEFAULT_SCHEDULE: WorkScheduleLike = {
   dailyHours: 8,
@@ -61,7 +62,10 @@ export async function getDayResultsForRange(
   end: Date
 ): Promise<DailyReport[]> {
   const schedule = await getOrCreateWorkSchedule(userId);
-  const now = new Date();
+  // Precisa ser o mesmo relógio de parede gravado nas batidas: `now` é
+  // subtraído do último registro para contar o dia em andamento, e um `now` em
+  // outro fuso somaria o offset inteiro às horas trabalhadas de hoje.
+  const now = appNow();
   const today = startOfDay(now);
 
   const [entries, absences] = await Promise.all([
@@ -217,7 +221,7 @@ export async function getAccumulatedBalance(userId: string, uptoDate: Date): Pro
   return summary.balanceDeltaMinutes + (adjustments._sum.minutes ?? 0);
 }
 
-export async function getDashboardData(userId: string, referenceDate: Date = new Date()) {
+export async function getDashboardData(userId: string, referenceDate: Date = appNow()) {
   const monthStart = startOfMonth(referenceDate);
   const monthEnd = endOfMonth(referenceDate);
   const yearStart = startOfYear(referenceDate);
@@ -247,7 +251,7 @@ export async function getDashboardData(userId: string, referenceDate: Date = new
 }
 
 export async function getBalanceTrend(userId: string, days = 90) {
-  const end = startOfDay(new Date());
+  const end = appToday();
   const start = addDays(end, -days + 1);
 
   const balanceAtStart = await getAccumulatedBalance(userId, addDays(start, -1));

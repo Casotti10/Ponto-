@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { timeEntrySchema, dayEntriesSchema } from "@/lib/validations";
+import { appNow, appToday } from "@/lib/timezone";
 import type { EntryType } from "@prisma/client";
 
 const DAY_ENTRY_TYPES: EntryType[] = ["ENTRADA", "SAIDA_ALMOCO", "RETORNO_ALMOCO", "SAIDA"];
@@ -24,8 +25,12 @@ function combineDateTime(dateStr: string, timeStr: string) {
 
 export async function punchNow(type: EntryType, notes?: string): Promise<FormResult> {
   const user = await requireUser();
-  const now = new Date();
-  const dateOnly = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  // `new Date()` aqui seria o relógio DO SERVIDOR (UTC na Vercel), enquanto o
+  // registro manual grava o relógio de parede que o usuário digitou. Misturar
+  // as duas convenções é o que fazia o ponto rápido nascer adiantado pelo
+  // offset do fuso — três horas, em produção.
+  const now = appNow();
+  const dateOnly = appToday();
 
   const entry = await prisma.timeEntry.create({
     data: {

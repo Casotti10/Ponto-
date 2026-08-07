@@ -10,7 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { createTimeEntry, updateTimeEntry, createTimeEntriesForDay } from "@/lib/actions/time-entries";
-import { format } from "date-fns";
+import { appDateString, appTimeString } from "@/lib/timezone";
 
 const TYPE_LABELS: Record<string, string> = {
   ENTRADA: "Entrada",
@@ -121,7 +121,7 @@ export function TimeEntryFormDialog({ trigger, initialValues, open: openProp, on
                   name="date"
                   type="date"
                   required
-                  defaultValue={initialValues?.date ?? format(new Date(), "yyyy-MM-dd")}
+                  defaultValue={initialValues?.date ?? appDateString()}
                 />
               </div>
               <div className="space-y-2">
@@ -131,7 +131,7 @@ export function TimeEntryFormDialog({ trigger, initialValues, open: openProp, on
                   name="time"
                   type="time"
                   required
-                  defaultValue={initialValues?.time ?? format(new Date(), "HH:mm")}
+                  defaultValue={initialValues?.time ?? appTimeString()}
                 />
               </div>
               <div className="col-span-2 space-y-2">
@@ -171,7 +171,7 @@ export function TimeEntryFormDialog({ trigger, initialValues, open: openProp, on
             <div className="grid grid-cols-2 gap-4 py-4">
               <div className="col-span-2 space-y-2">
                 <Label htmlFor="day-date">Data</Label>
-                <Input id="day-date" name="date" type="date" required defaultValue={format(new Date(), "yyyy-MM-dd")} />
+                <Input id="day-date" name="date" type="date" required defaultValue={appDateString()} />
               </div>
               {DAY_ENTRY_TYPES.map((type) => (
                 <div key={type} className="space-y-2">

@@ -11,6 +11,7 @@ import {
 } from "date-fns";
 import { requireUser } from "@/lib/auth";
 import { getDayResultsForRange, summarizeDayResults } from "@/lib/time-service";
+import { appNow } from "@/lib/timezone";
 import { minutesToHM } from "@/lib/time-calc";
 import { StatCard } from "@/components/dashboard/stat-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -24,7 +25,7 @@ import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
 function resolveRange(range: string, startParam?: string, endParam?: string) {
-  const now = new Date();
+  const now = appNow();
   switch (range) {
     case "day":
       return { start: startOfDay(now), end: endOfDay(now) };

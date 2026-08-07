@@ -2,6 +2,7 @@ import { Wallet, TrendingUp, TrendingDown, History as HistoryIcon } from "lucide
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { getAccumulatedBalance, getDashboardData } from "@/lib/time-service";
+import { appNow } from "@/lib/timezone";
 import { minutesToHM } from "@/lib/time-calc";
 import { StatCard } from "@/components/dashboard/stat-card";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -16,7 +17,7 @@ import { startOfYear } from "date-fns";
 
 export default async function BancoHorasPage() {
   const user = await requireUser();
-  const now = new Date();
+  const now = appNow();
 
   const [dashboard, yearBalance, adjustments, closures] = await Promise.all([
     getDashboardData(user.id, now),

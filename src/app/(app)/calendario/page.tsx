@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight, CalendarDays } from "lucide-react";
 import { startOfMonth, endOfMonth, startOfWeek, endOfWeek, format } from "date-fns";
 import { requireUser } from "@/lib/auth";
 import { getDayResultsForRange } from "@/lib/time-service";
+import { appNow } from "@/lib/timezone";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { buttonVariants } from "@/components/ui/button";
 import { MonthCalendar, type CalendarDay } from "@/components/calendar/month-calendar";
@@ -27,7 +28,7 @@ export default async function CalendarioPage({
 }) {
   const user = await requireUser();
   const params = await searchParams;
-  const now = new Date();
+  const now = appNow();
   const year = params.year ? Number(params.year) : now.getFullYear();
   const month = params.month ? Number(params.month) : now.getMonth() + 1;
 
