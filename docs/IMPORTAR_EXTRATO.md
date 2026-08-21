@@ -1,9 +1,14 @@
 # Importar extrato bancário
 
-Traz os gastos do banco para o razão de `/financeiro` a partir do **extrato que
-o próprio banco exporta** — OFX ou CSV. Cada lançamento entra no mês da sua
-própria data, então o extrato de agosto alimenta agosto e o de setembro
-alimenta setembro.
+Traz os gastos do banco para o razão de `/financeiro` a partir do **extrato ou
+da fatura que o próprio banco exporta** — OFX, CSV ou PDF. Cada lançamento entra
+no mês da sua própria data, então o extrato de agosto alimenta agosto e o de
+setembro alimenta setembro.
+
+**Ordem de preferência: OFX → CSV → PDF.** O OFX traz um identificador único por
+lançamento (`FITID`) e a importação vira exata. O PDF não tem estrutura de dados
+nenhuma: é texto posicionado numa página, e ler lançamento dele é reconhecer
+padrão de layout — que o banco muda sem avisar.
 
 ## Por que não conecta direto no banco
 
@@ -37,9 +42,41 @@ Quem não está na lista não vê o botão **Importar extrato** e recebe `403` n
 | Caixa | Extrato → *Salvar em outro formato* | OFX |
 
 **Prefira OFX.** Ele traz o `FITID`, um identificador único por lançamento, e é
-com ele que a importação garante não duplicar nada. O CSV não tem identificador,
-então a deduplicação usa uma impressão digital calculada do próprio lançamento —
-funciona, mas é menos preciso.
+com ele que a importação garante não duplicar nada. CSV e PDF não têm
+identificador, então a deduplicação usa uma impressão digital calculada do
+próprio lançamento — funciona, mas é menos preciso.
+
+## PDF
+
+Existe porque vários bancos não oferecem OFX da **fatura do cartão**. Dois
+layouts são reconhecidos, com graus de confiança bem diferentes:
+
+| Layout | Estado |
+|---|---|
+| Extrato de conta do Nubank | **Verificado** contra um arquivo real: os totais de entrada e saída batem ao centavo com o que o próprio banco declara no documento (129 lançamentos, 0 descartados) |
+| Fatura de cartão no padrão `DD/MM DESCRIÇÃO VALOR` (Santander, Itaú, Bradesco, BB) | **Não calibrado.** A lógica foi testada contra faturas sintéticas, mas nenhuma fatura real foi aberta durante o desenvolvimento — a que motivou o recurso é protegida por senha |
+
+Se a sua fatura não for lida corretamente, o layout dela difere do padrão e
+precisa de ajuste em `parseFatura`, em
+[`src/lib/pdf-statement-parser.ts`](../src/lib/pdf-statement-parser.ts).
+
+### Senha
+
+Bancos costumam proteger a fatura em PDF (a do Santander usa RC4-128). Quando o
+arquivo é protegido, a interface mostra um campo de senha — normalmente são
+dígitos do CPF ou a data de nascimento. A senha é usada apenas para abrir o
+documento naquela requisição: **não é gravada, não vai para log e não sobrevive
+ao fechamento do diálogo.**
+
+### O que o PDF não resolve
+
+- **PDF digitalizado** (imagem, sem camada de texto) é recusado com mensagem
+  clara. Não há OCR.
+- Numa **fatura**, tudo é despesa por padrão. Pagamentos e estornos viram
+  entrada, detectados pelo sufixo (`-`, `CR`, `C`) ou pela descrição.
+- A fatura mostra a compra como `DD/MM`, sem ano. O ano sai do vencimento, do
+  texto ou do nome do arquivo — numa fatura de janeiro, uma compra de 15/12 é do
+  ano anterior.
 
 ## Usando pela tela
 
@@ -62,11 +99,15 @@ de sessão.
 
 | Campo | Obrigatório | Descrição |
 |---|---|---|
-| `file` | sim | `.ofx`, `.csv` ou `.txt`, até 5 MB |
+| `file` | sim | `.ofx`, `.csv`, `.txt` ou `.pdf`, até 5 MB |
 | `accountId` | sim | conta de destino |
 | `mode` | não | `preview` (padrão) ou `commit` |
 | `includePossibleDuplicates` | não | `true` grava também o que casa com lançamento manual |
 | `createMissingCategories` | não | `true` (padrão) cria as categorias sugeridas |
+| `password` | não | senha do PDF, quando o banco protege o arquivo |
+
+O formato é detectado pelo **conteúdo**, não pela extensão: um OFX salvo como
+`.txt` e um PDF com qualquer nome são reconhecidos pelos bytes iniciais.
 
 ```bash
 # Conferir sem gravar
@@ -87,7 +128,8 @@ curl -X POST https://<app>/api/financeiro/import \
 `GET /api/financeiro/import` devolve os limites (formatos, tamanho máximo).
 
 Códigos: `401` sem sessão · `403` fora da allowlist · `413` arquivo grande
-demais · `422` arquivo ilegível ou sem lançamentos aproveitáveis.
+demais · `422` arquivo ilegível, sem lançamentos aproveitáveis, ou PDF protegido
+(a resposta traz `passwordRequired: true`).
 
 ## Como a duplicação é evitada
 
@@ -95,7 +137,7 @@ A coluna `Transaction.externalId` guarda a identidade do lançamento na origem,
 com `@@unique([accountId, externalId])`:
 
 - **OFX** → `ofx:<FITID>`, o id que o banco emitiu.
-- **CSV** → `csv:<sha1(data|tipo|valor|descrição)>:<ocorrência>`. O contador de
+- **CSV e PDF** → `fp:<sha1(data|tipo|valor|descrição)>:<ocorrência>`. O contador de
   ocorrência distingue lançamentos legitimamente iguais no mesmo dia (dois cafés
   de R$ 5 no mesmo lugar entram os dois), e como ele é determinístico, reenviar o
   arquivo não gera chave nova.
@@ -131,5 +173,6 @@ próximo deploy**. Em banco local: `npx prisma migrate deploy`.
 ## Limites
 
 - 5 MB por arquivo, 5.000 lançamentos por importação
+- PDF digitalizado (sem camada de texto) não é lido — não há OCR
 - Extrato muito longo: exporte em períodos menores
 - Linhas ilegíveis são descartadas e listadas no preview, sem derrubar o resto

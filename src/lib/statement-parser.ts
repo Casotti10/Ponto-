@@ -8,7 +8,7 @@
  * um arquivo de exemplo sem subir banco.
  */
 
-export type StatementFormat = "OFX" | "CSV";
+export type StatementFormat = "OFX" | "CSV" | "PDF";
 
 export interface ParsedEntry {
   /**

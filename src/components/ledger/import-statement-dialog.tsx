@@ -14,6 +14,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -34,6 +35,16 @@ const STATUS_LABEL: Record<string, string> = {
   POSSIVEL_DUPLICADO: "Possível duplicado",
 };
 
+/** Erro da rota que carrega o sinal de "precisa de senha" junto da mensagem. */
+class ImportRequestError extends Error {
+  readonly passwordRequired: boolean;
+
+  constructor(message: string, passwordRequired: boolean) {
+    super(message);
+    this.passwordRequired = passwordRequired;
+  }
+}
+
 /**
  * Importação de extrato bancário em duas etapas.
  *
@@ -53,7 +64,16 @@ export function ImportStatementDialog({ accounts, trigger, children }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [includePossibleDuplicates, setIncludePossibleDuplicates] = useState(false);
   const [createMissingCategories, setCreateMissingCategories] = useState(true);
+  // Senha de PDF protegido. Vive só neste estado: vai no corpo da requisição,
+  // o servidor usa para abrir o documento e ninguém grava em lugar nenhum.
+  const [password, setPassword] = useState("");
+  // O servidor pode detectar PDF pelos bytes mesmo num arquivo com outra
+  // extensão; nesse caso é a resposta dele que revela o campo.
+  const [passwordPrompted, setPasswordPrompted] = useState(false);
   const [pending, startTransition] = useTransition();
+
+  const isPdfFile = !!file && /\.pdf$/i.test(file.name);
+  const showPasswordField = isPdfFile || passwordPrompted;
 
   const accountItems = Object.fromEntries(accounts.map((a) => [a.id, a.name]));
 
@@ -63,6 +83,9 @@ export function ImportStatementDialog({ accounts, trigger, children }: Props) {
     setError(null);
     setIncludePossibleDuplicates(false);
     setCreateMissingCategories(true);
+    // A senha não sobrevive ao fechamento do diálogo.
+    setPassword("");
+    setPasswordPrompted(false);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
@@ -80,12 +103,16 @@ export function ImportStatementDialog({ accounts, trigger, children }: Props) {
     body.append("mode", mode);
     body.append("includePossibleDuplicates", String(includePossibleDuplicates));
     body.append("createMissingCategories", String(createMissingCategories));
+    if (password) body.append("password", password);
 
     const response = await fetch("/api/financeiro/import", { method: "POST", body });
     const payload = await response.json();
 
     if (!response.ok) {
-      throw new Error(payload?.error ?? "Não foi possível processar o arquivo.");
+      throw new ImportRequestError(
+        payload?.error ?? "Não foi possível processar o arquivo.",
+        payload?.passwordRequired === true
+      );
     }
 
     return payload;
@@ -98,6 +125,7 @@ export function ImportStatementDialog({ accounts, trigger, children }: Props) {
         const result = (await send("preview")) as ImportPreview | null;
         if (result) setPreview(result);
       } catch (e) {
+        if (e instanceof ImportRequestError && e.passwordRequired) setPasswordPrompted(true);
         setError(e instanceof Error ? e.message : "Falha ao ler o arquivo.");
       }
     });
@@ -130,6 +158,7 @@ export function ImportStatementDialog({ accounts, trigger, children }: Props) {
         // pertencem, e o refresh reconsulta o Server Component do mês aberto.
         router.refresh();
       } catch (e) {
+        if (e instanceof ImportRequestError && e.passwordRequired) setPasswordPrompted(true);
         setError(e instanceof Error ? e.message : "Falha ao importar.");
       }
     });
@@ -146,8 +175,8 @@ export function ImportStatementDialog({ accounts, trigger, children }: Props) {
         <DialogHeader>
           <DialogTitle>Importar extrato bancário</DialogTitle>
           <DialogDescription>
-            Envie o extrato em OFX ou CSV exportado pelo app do seu banco. Cada lançamento entra no
-            mês da própria data.
+            Envie o extrato ou a fatura exportados pelo app do seu banco — OFX, CSV ou PDF. Cada
+            lançamento entra no mês da própria data.
           </DialogDescription>
         </DialogHeader>
 
@@ -185,7 +214,7 @@ export function ImportStatementDialog({ accounts, trigger, children }: Props) {
                 ref={fileInputRef}
                 id="import-file"
                 type="file"
-                accept=".ofx,.csv,.txt,text/csv,application/x-ofx"
+                accept=".ofx,.csv,.txt,.pdf,text/csv,application/pdf,application/x-ofx"
                 onChange={(e) => {
                   setFile(e.target.files?.[0] ?? null);
                   setPreview(null);
@@ -195,6 +224,27 @@ export function ImportStatementDialog({ accounts, trigger, children }: Props) {
               />
             </div>
           </div>
+
+          {showPasswordField && (
+            <div className="space-y-2">
+              <Label htmlFor="import-password">Senha do PDF (se houver)</Label>
+              <Input
+                id="import-password"
+                type="password"
+                autoComplete="off"
+                value={password}
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  setError(null);
+                }}
+                placeholder="Deixe em branco se o arquivo abrir sem senha"
+              />
+              <p className="text-xs text-muted-foreground">
+                Bancos costumam proteger a fatura com dígitos do CPF ou a data de nascimento. A
+                senha é usada só para abrir o arquivo e não fica guardada.
+              </p>
+            </div>
+          )}
 
           {error && (
             <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">

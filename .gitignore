@@ -49,3 +49,14 @@ next-env.d.ts
 # Reafirma a excecao: o `.env*` acima foi acrescentado pela CLI da Vercel
 # durante `vercel link` e, por vir depois, anulava a regra do topo do arquivo.
 !.env.example
+
+# Extratos e faturas de verdade. Documento bancario nao entra em repositorio:
+# a fatura traz numero de cartao, CPF e o historico de compras. Para testar o
+# importador, use os exemplos anonimos de docs/ ou um arquivo fora do projeto.
+*.ofx
+*.OFX
+Fatura*.pdf
+Fatura*.PDF
+extrato*.pdf
+extrato*.PDF
+NU_*.pdf

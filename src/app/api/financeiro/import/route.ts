@@ -9,6 +9,12 @@ import {
   MAX_ENTRIES_PER_IMPORT,
 } from "@/lib/import-service";
 import { decodeStatementBytes, parseStatement, StatementParseError } from "@/lib/statement-parser";
+import {
+  extractPdfText,
+  isPdf,
+  parsePdfStatement,
+  PdfPasswordError,
+} from "@/lib/pdf-statement-parser";
 
 /**
  * POST /api/financeiro/import
@@ -27,13 +33,15 @@ import { decodeStatementBytes, parseStatement, StatementParseError } from "@/lib
  * do navegador, então o que entra no banco é sempre o que está no arquivo.
  *
  * Corpo: multipart/form-data
- *   file                      (obrigatório) .ofx | .csv | .txt
+ *   file                      (obrigatório) .ofx | .csv | .txt | .pdf
  *   accountId                 (obrigatório) conta de destino
  *   mode                      preview | commit
  *   includePossibleDuplicates true para gravar também o que casa com lançamento
  *                             digitado à mão no mesmo dia/valor
  *   createMissingCategories   true (padrão) para criar as categorias que a
  *                             classificação automática sugerir
+ *   password                  senha do PDF, quando o banco protege o arquivo.
+ *                             Usada só para abrir o documento e nunca gravada.
  *
  * Exemplo:
  *   curl -X POST https://<app>/api/financeiro/import \
@@ -92,6 +100,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Selecione a conta de destino." }, { status: 400 });
   }
 
+  // Só existe durante esta requisição: nunca é persistida nem registrada em log.
+  const password = String(form.get("password") ?? "").trim();
+
   const mode = String(form.get("mode") ?? "preview").toLowerCase();
   if (mode !== "preview" && mode !== "commit") {
     return NextResponse.json({ error: "mode deve ser preview ou commit." }, { status: 400 });
@@ -99,8 +110,12 @@ export async function POST(request: Request) {
 
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
-    const content = decodeStatementBytes(bytes);
-    const statement = parseStatement(content);
+
+    // PDF segue outro caminho: precisa de extração de texto (assíncrona, e com
+    // senha quando o banco protege o arquivo) antes de virar lançamento.
+    const statement = isPdf(bytes)
+      ? parsePdfStatement(await extractPdfText(bytes, password || undefined), file.name)
+      : parseStatement(decodeStatementBytes(bytes));
 
     if (mode === "preview") {
       const preview = await previewImport(user.id, accountId, statement);
@@ -139,6 +154,15 @@ export async function POST(request: Request) {
 
     return NextResponse.json(result);
   } catch (error) {
+    // A interface usa `passwordRequired` para revelar o campo de senha em vez
+    // de mostrar só uma mensagem de erro.
+    if (error instanceof PdfPasswordError) {
+      return NextResponse.json(
+        { error: error.message, passwordRequired: true, passwordWrong: !error.missing },
+        { status: 422 }
+      );
+    }
+
     if (error instanceof StatementParseError || error instanceof ImportValidationError) {
       return NextResponse.json({ error: error.message }, { status: 422 });
     }
@@ -161,7 +185,7 @@ export async function GET() {
   }
 
   return NextResponse.json({
-    formats: ["OFX", "CSV"],
+    formats: ["OFX", "CSV", "PDF"],
     maxFileBytes: MAX_FILE_BYTES,
     maxEntriesPerImport: MAX_ENTRIES_PER_IMPORT,
     modes: ["preview", "commit"],

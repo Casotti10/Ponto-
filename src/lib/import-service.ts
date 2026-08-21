@@ -86,7 +86,7 @@ export class ImportValidationError extends Error {
 /* -------------------------------------------------------------------------- */
 
 /**
- * Impressão digital de um lançamento de CSV, que não traz identificador.
+ * Impressão digital de um lançamento sem identificador de origem (CSV e PDF).
  *
  * Determinística de propósito: o mesmo arquivo enviado de novo — ou um extrato
  * novo cujo período se sobrepõe ao anterior — gera exatamente as mesmas chaves,
@@ -105,7 +105,7 @@ function fingerprint(entry: ParsedEntry, occurrence: number): string {
   ].join("|");
 
   const hash = createHash("sha1").update(signature).digest("hex").slice(0, 16);
-  return `csv:${hash}:${occurrence}`;
+  return `fp:${hash}:${occurrence}`;
 }
 
 function externalIdFor(entry: ParsedEntry, occurrence: number): string {
