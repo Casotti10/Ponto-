@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDownRight, ArrowUpRight, Landmark, TrendingUp, TrendingDown } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Hash, Landmark, TrendingUp, TrendingDown } from "lucide-react";
 import { centsToBRL, centsToSignedBRL } from "@/lib/ledger-calc";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -121,6 +121,18 @@ export function MonthlySummary({
             </p>
             <p className={`text-lg font-semibold ${isPositive ? "text-green-600" : "text-red-600"}`}>
               {centsToSignedBRL(totals.balanceCents)}
+            </p>
+          </div>
+
+          {/* Quantidade de Lançamentos */}
+          <div className="space-y-1">
+            <p className="text-sm text-muted-foreground flex items-center gap-1">
+              <Hash className="h-4 w-4" />
+              Lançamentos
+            </p>
+            <p className="text-lg font-semibold tabular-nums">{totalTransactions}</p>
+            <p className="text-xs text-muted-foreground">
+              {incomeCount} entrada(s) · {expenseCount} saída(s)
             </p>
           </div>
 

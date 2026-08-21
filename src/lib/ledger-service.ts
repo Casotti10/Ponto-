@@ -1,12 +1,15 @@
-import { endOfMonth, startOfMonth, startOfYear, endOfYear } from "date-fns";
 import { prisma } from "@/lib/prisma";
 import {
   breakdownByCategory,
   buildDailyFlow,
-  computeAccountBalances,
+  computeAccountBalancesFromTotals,
+  ledgerMonthOf,
+  ledgerMonthRange,
+  ledgerYearRange,
   occurrencesInMonth,
   signedCents,
   summarizeTransactions,
+  MONTH_NAMES,
   MONTH_SHORT_NAMES,
   type AccountBalance,
   type CategoryBreakdownItem,
@@ -20,6 +23,15 @@ import {
  *
  * Segue o mesmo desenho de `src/lib/time-service.ts`: aqui ficam as consultas
  * ao Prisma; toda a matemática mora em `src/lib/ledger-calc.ts`.
+ *
+ * DUAS LEITURAS, DOIS PROPÓSITOS — e elas não se misturam:
+ *
+ *  - `getMonthlyLedger`  → a VISÃO MENSAL. Recorta um mês/ano e só ele.
+ *  - `getLedgerHistory`  → a VISÃO GERAL. Todo o histórico, com paginação.
+ *
+ * Em ambas o recorte é cláusula `where` no Prisma, nunca `.filter()` sobre um
+ * conjunto maior já carregado: trocar de mês na tela precisa virar uma consulta
+ * nova ao banco, senão o "filtro" seria só a UI escondendo linhas.
  */
 
 /** Categorias criadas na primeira visita, para o usuário não começar no vazio. */
@@ -37,6 +49,61 @@ const SEED_CATEGORIES: { name: string; type: "ENTRADA" | "SAIDA"; color: string 
   { name: "Educação", type: "SAIDA", color: "#e87ba4" },
   { name: "Outros gastos", type: "SAIDA", color: "#898781" },
 ];
+
+/** Lançamento pronto para a tela: já com nome e cor de conta e categoria. */
+export interface LedgerTransaction extends TransactionLike {
+  notes: string | null;
+  recurringId: string | null;
+  accountName: string;
+  accountColor: string;
+  categoryName: string | null;
+  categoryColor: string | null;
+}
+
+export interface LedgerCategory {
+  id: string;
+  name: string;
+  type: "ENTRADA" | "SAIDA";
+  color: string;
+}
+
+/** O `select` que transforma uma linha do Prisma em `LedgerTransaction`. */
+const TRANSACTION_INCLUDE = {
+  account: { select: { name: true, color: true } },
+  category: { select: { name: true, color: true } },
+} as const;
+
+type TransactionRow = {
+  id: string;
+  date: Date;
+  description: string;
+  amountCents: number;
+  type: "ENTRADA" | "SAIDA";
+  accountId: string;
+  categoryId: string | null;
+  notes: string | null;
+  recurringId: string | null;
+  account: { name: string; color: string };
+  category: { name: string; color: string } | null;
+};
+
+function toLedgerTransaction(tx: TransactionRow): LedgerTransaction {
+  return {
+    id: tx.id,
+    date: tx.date,
+    description: tx.description,
+    amountCents: tx.amountCents,
+    type: tx.type,
+    accountId: tx.accountId,
+    categoryId: tx.categoryId,
+    notes: tx.notes,
+    recurringId: tx.recurringId,
+    accountName: tx.account.name,
+    accountColor: tx.account.color,
+    categoryName: tx.category?.name ?? null,
+    categoryColor: tx.category?.color ?? null,
+  };
+}
 
 /**
  * Garante que o usuário tenha ao menos uma conta e o conjunto inicial de
@@ -74,10 +141,10 @@ export async function ensureLedgerBootstrap(userId: string) {
  * "essa conta existe todo mês").
  */
 export async function materializeRecurrences(userId: string, year: number, month: number) {
-  const monthStart = startOfMonth(new Date(year, month - 1, 1));
+  const { end } = ledgerMonthRange(year, month);
 
   const recurrences = await prisma.recurringTransaction.findMany({
-    where: { userId, active: true, startDate: { lte: endOfMonth(monthStart) } },
+    where: { userId, active: true, startDate: { lte: end } },
   });
   if (recurrences.length === 0) return 0;
 
@@ -99,24 +166,57 @@ export async function materializeRecurrences(userId: string, year: number, month
   return result.count;
 }
 
-/** Saldo consolidado de todas as contas ANTES de uma data — o "caixa inicial" do mês. */
-export async function getBalanceBefore(userId: string, date: Date): Promise<number> {
-  const [accounts, aggregate] = await Promise.all([
-    prisma.account.aggregate({ where: { userId }, _sum: { openingBalanceCents: true } }),
+/**
+ * Saldo consolidado ANTES de uma data — o "caixa inicial" do mês.
+ *
+ * Com `accountId`, considera só o saldo inicial e os lançamentos daquela conta:
+ * quando o usuário filtra por um banco, o saldo de abertura tem que ser o
+ * daquele banco, não o de todos somados.
+ */
+export async function getBalanceBefore(
+  userId: string,
+  date: Date,
+  accountId: string | null = null
+): Promise<number> {
+  const accountWhere = accountId ? { id: accountId, userId } : { userId };
+
+  const [accounts, movements] = await Promise.all([
+    prisma.account.aggregate({ where: accountWhere, _sum: { openingBalanceCents: true } }),
     prisma.transaction.groupBy({
       by: ["type"],
-      where: { userId, date: { lt: date } },
+      where: { userId, date: { lt: date }, ...(accountId ? { accountId } : {}) },
       _sum: { amountCents: true },
     }),
   ]);
 
   const opening = accounts._sum.openingBalanceCents ?? 0;
-  const movement = aggregate.reduce(
+  const movement = movements.reduce(
     (acc, row) => acc + signedCents({ amountCents: row._sum.amountCents ?? 0, type: row.type }),
     0
   );
 
   return opening + movement;
+}
+
+/** Saldo líquido (entradas − saídas) de um mês. Consulta agregada, sem trazer linhas. */
+export async function getMonthNetCents(
+  userId: string,
+  year: number,
+  month: number,
+  accountId: string | null = null
+): Promise<number> {
+  const { start, end } = ledgerMonthRange(year, month);
+
+  const rows = await prisma.transaction.groupBy({
+    by: ["type"],
+    where: { userId, date: { gte: start, lte: end }, ...(accountId ? { accountId } : {}) },
+    _sum: { amountCents: true },
+  });
+
+  return rows.reduce(
+    (acc, row) => acc + signedCents({ amountCents: row._sum.amountCents ?? 0, type: row.type }),
+    0
+  );
 }
 
 export interface MonthSeriesPoint {
@@ -128,29 +228,25 @@ export interface MonthSeriesPoint {
   isFuture: boolean;
 }
 
-export interface LedgerOverview {
+export interface MonthlyLedger {
   year: number;
   month: number;
   totals: PeriodTotals;
-  /** Caixa de todas as contas somado no fim do mês selecionado. */
-  closingCents: number;
+  /** Caixa somado no início do mês selecionado. */
   openingCents: number;
-  transactions: (TransactionLike & {
-    notes: string | null;
-    recurringId: string | null;
-    accountName: string;
-    accountColor: string;
-    categoryName: string | null;
-    categoryColor: string | null;
-  })[];
+  /** Caixa no fim do mês: abertura + saldo do mês. */
+  closingCents: number;
+  /** Saldo líquido do mês anterior, para a comparação do resumo. */
+  previousNetCents: number;
+  transactions: LedgerTransaction[];
   dailyFlow: DailyFlowPoint[];
   expensesByCategory: CategoryBreakdownItem[];
   incomeByCategory: CategoryBreakdownItem[];
-  /** Contas usadas nos cálculos: filtradas se accountId foi fornecido, senão todas. */
+  /** Contas no escopo do filtro — é sobre elas que "dinheiro em caixa" soma. */
   accounts: AccountBalance[];
-  /** ✅ NOVO: Sempre retorna TODAS as contas, independentemente do filtro. Usado para AccountsManager. */
-  allAccounts?: AccountBalance[];
-  categories: { id: string; name: string; type: "ENTRADA" | "SAIDA"; color: string }[];
+  /** Todas as contas, sempre. O gerenciador de contas não deve sumir com o filtro. */
+  allAccounts: AccountBalance[];
+  categories: LedgerCategory[];
   recurrences: {
     id: string;
     description: string;
@@ -172,30 +268,36 @@ export interface LedgerOverview {
 }
 
 /**
- * Monta, em uma tacada, tudo que a página /financeiro precisa.
+ * VISÃO MENSAL: tudo que a página /financeiro precisa de UM mês.
+ *
+ * O recorte `date >= início do mês AND date <= fim do mês` é cláusula do Prisma
+ * (índice `[userId, date]`), assim como o filtro de conta. Trocar de mês na
+ * interface reexecuta este Server Component e, com ele, esta consulta — os
+ * lançamentos de agosto nunca chegam a ser carregados quando a tela está em
+ * setembro.
  *
  * Ordem importa: as recorrências são materializadas ANTES de ler os lançamentos
  * do mês, senão o aluguel do mês corrente só apareceria no segundo refresh.
  */
-export async function getLedgerOverview(
+export async function getMonthlyLedger(
   userId: string,
   year: number,
   month: number,
+  accountId: string | null = null,
   referenceDate: Date = new Date()
-): Promise<LedgerOverview> {
+): Promise<MonthlyLedger> {
   await ensureLedgerBootstrap(userId);
   await materializeRecurrences(userId, year, month);
 
-  const monthStart = startOfMonth(new Date(year, month - 1, 1));
-  const monthEnd = endOfMonth(monthStart);
-  const yearStart = startOfYear(monthStart);
-  const yearEnd = endOfYear(monthStart);
+  const { start: monthStart, end: monthEnd } = ledgerMonthRange(year, month);
+  const { start: yearStart, end: yearEnd } = ledgerYearRange(year);
+  const accountScope = accountId ? { accountId } : {};
 
-  const [monthRows, accountRows, categoryRows, recurrenceRows, yearRows, openingCents] =
+  const [monthRows, accountRows, categoryRows, recurrenceRows, yearRows, balanceTotals, openingCents] =
     await Promise.all([
       prisma.transaction.findMany({
-        where: { userId, date: { gte: monthStart, lte: monthEnd } },
-        include: { account: true, category: true },
+        where: { userId, date: { gte: monthStart, lte: monthEnd }, ...accountScope },
+        include: TRANSACTION_INCLUDE,
         orderBy: [{ date: "desc" }, { createdAt: "desc" }],
       }),
       prisma.account.findMany({ where: { userId }, orderBy: { createdAt: "asc" } }),
@@ -204,41 +306,27 @@ export async function getLedgerOverview(
         orderBy: [{ type: "asc" }, { name: "asc" }],
       }),
       prisma.recurringTransaction.findMany({
-        where: { userId },
-        include: { account: true, category: true },
+        where: { userId, ...accountScope },
+        include: { account: { select: { name: true } }, category: { select: { name: true } } },
         orderBy: [{ active: "desc" }, { dayOfMonth: "asc" }],
       }),
       prisma.transaction.findMany({
-        where: { userId, date: { gte: yearStart, lte: yearEnd } },
+        where: { userId, date: { gte: yearStart, lte: yearEnd }, ...accountScope },
         select: { date: true, amountCents: true, type: true },
       }),
-      getBalanceBefore(userId, monthStart),
+      // O saldo de cada conta é histórico, não mensal. Somar isso no banco
+      // evita carregar todo o passado só para fechar um número.
+      prisma.transaction.groupBy({
+        by: ["accountId", "type"],
+        where: { userId, date: { lte: monthEnd } },
+        _sum: { amountCents: true },
+        _count: { _all: true },
+      }),
+      getBalanceBefore(userId, monthStart, accountId),
     ]);
 
-  // O saldo de cada conta é histórico, não mensal — precisa de todos os
-  // lançamentos, não só os do mês em tela.
-  const allForBalance = await prisma.transaction.findMany({
-    where: { userId, date: { lte: monthEnd } },
-    select: { id: true, date: true, description: true, amountCents: true, type: true, accountId: true, categoryId: true },
-  });
-
-  const transactions = monthRows.map((tx) => ({
-    id: tx.id,
-    date: tx.date,
-    description: tx.description,
-    amountCents: tx.amountCents,
-    type: tx.type,
-    accountId: tx.accountId,
-    categoryId: tx.categoryId,
-    notes: tx.notes,
-    recurringId: tx.recurringId,
-    accountName: tx.account.name,
-    accountColor: tx.account.color,
-    categoryName: tx.category?.name ?? null,
-    categoryColor: tx.category?.color ?? null,
-  }));
-
-  const categories = categoryRows.map((c) => ({
+  const transactions = monthRows.map(toLedgerTransaction);
+  const categories: LedgerCategory[] = categoryRows.map((c) => ({
     id: c.id,
     name: c.name,
     type: c.type,
@@ -247,9 +335,26 @@ export async function getLedgerOverview(
 
   const totals = summarizeTransactions(transactions);
 
+  const allAccounts = computeAccountBalancesFromTotals(
+    accountRows.map((a) => ({
+      id: a.id,
+      name: a.name,
+      type: a.type,
+      openingBalanceCents: a.openingBalanceCents,
+      color: a.color,
+      archived: a.archived,
+    })),
+    balanceTotals.map((row) => ({
+      accountId: row.accountId,
+      type: row.type,
+      amountCents: row._sum.amountCents ?? 0,
+      count: row._count._all,
+    }))
+  );
+
   const byMonth = new Map<number, { income: number; expense: number }>();
   for (const row of yearRows) {
-    const key = row.date.getMonth();
+    const key = ledgerMonthOf(row.date).month - 1;
     const entry = byMonth.get(key) ?? { income: 0, expense: 0 };
     if (row.type === "ENTRADA") entry.income += row.amountCents;
     else entry.expense += row.amountCents;
@@ -268,27 +373,23 @@ export async function getLedgerOverview(
     };
   });
 
+  const previousMonth = month === 1 ? 12 : month - 1;
+  const previousYear = month === 1 ? year - 1 : year;
+  const previousNetCents = await getMonthNetCents(userId, previousYear, previousMonth, accountId);
+
   return {
     year,
     month,
     totals,
     openingCents,
     closingCents: openingCents + totals.balanceCents,
+    previousNetCents,
     transactions,
     dailyFlow: buildDailyFlow(transactions, year, month, openingCents),
     expensesByCategory: breakdownByCategory(transactions, categories, "SAIDA"),
     incomeByCategory: breakdownByCategory(transactions, categories, "ENTRADA"),
-    accounts: computeAccountBalances(
-      accountRows.map((a) => ({
-        id: a.id,
-        name: a.name,
-        type: a.type,
-        openingBalanceCents: a.openingBalanceCents,
-        color: a.color,
-        archived: a.archived,
-      })),
-      allForBalance
-    ),
+    accounts: accountId ? allAccounts.filter((a) => a.id === accountId) : allAccounts,
+    allAccounts,
     categories,
     recurrences: recurrenceRows.map((r) => ({
       id: r.id,
@@ -311,67 +412,205 @@ export async function getLedgerOverview(
   };
 }
 
-/**
- * Mesmo que getLedgerOverview, mas filtrando por conta específica se `accountId` for fornecido.
- *
- * Quando accountId é fornecido:
- * - Transações são filtradas apenas dessa conta
- * - Gráficos mostram apenas dados dessa conta
- * - Saldos iniciais e finais são apenas dessa conta
- * - RETORNA APENAS A CONTA FILTRADA no array `accounts`
- *
- * Quando accountId é null, comporta-se como getLedgerOverview (todas as contas).
- *
- * IMPORTANTE: Todos os cálculos (cards, gráficos, totais) respeitam o filtro.
- */
-export async function getLedgerOverviewFiltered(
-  userId: string,
-  year: number,
-  month: number,
-  accountId: string | null,
-  referenceDate: Date = new Date()
-): Promise<LedgerOverview> {
-  const overview = await getLedgerOverview(userId, year, month, referenceDate);
+/* ------------------------------- visão geral ------------------------------ */
 
-  if (!accountId) {
-    return overview;
+export interface LedgerHistoryFilters {
+  /** `null` = todos os anos. */
+  year: number | null;
+  accountId: string | null;
+  categoryId: string | null;
+  type: "ENTRADA" | "SAIDA" | null;
+  search: string | null;
+  page: number;
+  pageSize: number;
+}
+
+export interface HistoryMonthRow {
+  year: number;
+  month: number;
+  label: string;
+  incomeCents: number;
+  expenseCents: number;
+  balanceCents: number;
+  transactionCount: number;
+}
+
+export interface LedgerHistory {
+  transactions: LedgerTransaction[];
+  /** Totais de TODO o conjunto filtrado, não só da página exibida. */
+  totals: PeriodTotals;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+  totalCount: number;
+  /** Um resumo por mês, do mais recente para o mais antigo. */
+  months: HistoryMonthRow[];
+  /** Anos que de fato têm lançamentos, para montar o seletor. */
+  availableYears: number[];
+  firstDate: Date | null;
+  lastDate: Date | null;
+  accounts: AccountBalance[];
+  categories: LedgerCategory[];
+}
+
+export const HISTORY_PAGE_SIZE = 50;
+
+/**
+ * VISÃO GERAL: o histórico inteiro, sem recorte de mês.
+ *
+ * Deliberadamente separada de `getMonthlyLedger` — são perguntas diferentes
+ * ("quanto gastei em agosto" vs. "o que já lancei desde sempre") e juntá-las é
+ * o que produz o sintoma de mês que vaza para mês.
+ *
+ * A página vem paginada do banco (`skip`/`take`), mas os totais e o resumo por
+ * mês são calculados sobre o conjunto filtrado INTEIRO — um total que só
+ * somasse a página seria uma resposta errada apresentada com confiança. Para
+ * isso a consulta de escopo traz só três colunas por linha.
+ */
+export async function getLedgerHistory(
+  userId: string,
+  filters: LedgerHistoryFilters
+): Promise<LedgerHistory> {
+  await ensureLedgerBootstrap(userId);
+
+  const { year, accountId, categoryId, type, search, pageSize } = filters;
+
+  // Filtros que valem para todas as consultas abaixo, EXCETO o de ano: o
+  // seletor de ano precisa listar os anos que existem dentro do resto do
+  // filtro, senão escolher uma categoria poderia esconder o próprio ano que
+  // está selecionado.
+  const baseWhere = {
+    userId,
+    ...(accountId ? { accountId } : {}),
+    ...(categoryId ? { categoryId: categoryId === "__none__" ? null : categoryId } : {}),
+    ...(type ? { type } : {}),
+    ...(search ? { description: { contains: search, mode: "insensitive" as const } } : {}),
+  };
+
+  // O mesmo `baseWhere`, agora com o recorte de ano — é este que pagina.
+  const yearRange = year ? ledgerYearRange(year) : null;
+  const fullWhere = {
+    ...baseWhere,
+    ...(yearRange ? { date: { gte: yearRange.start, lte: yearRange.end } } : {}),
+  };
+
+  const [scopeRows, totalCount, accountRows, categoryRows, balanceTotals] = await Promise.all([
+    prisma.transaction.findMany({
+      where: baseWhere,
+      select: { date: true, amountCents: true, type: true },
+      orderBy: { date: "asc" },
+    }),
+    prisma.transaction.count({ where: fullWhere }),
+    prisma.account.findMany({ where: { userId }, orderBy: { createdAt: "asc" } }),
+    prisma.category.findMany({
+      where: { userId, archived: false },
+      orderBy: [{ type: "asc" }, { name: "asc" }],
+    }),
+    prisma.transaction.groupBy({
+      by: ["accountId", "type"],
+      where: { userId },
+      _sum: { amountCents: true },
+      _count: { _all: true },
+    }),
+  ]);
+
+  const availableYears = Array.from(
+    new Set(scopeRows.map((row) => ledgerMonthOf(row.date).year))
+  ).sort((a, b) => b - a);
+
+  const inScope = year
+    ? scopeRows.filter((row) => ledgerMonthOf(row.date).year === year)
+    : scopeRows;
+
+  const pageCount = Math.max(1, Math.ceil(totalCount / pageSize));
+  const page = Math.min(Math.max(1, filters.page), pageCount);
+
+  const pageRows = await prisma.transaction.findMany({
+    where: fullWhere,
+    include: TRANSACTION_INCLUDE,
+    orderBy: [{ date: "desc" }, { createdAt: "desc" }],
+    skip: (page - 1) * pageSize,
+    take: pageSize,
+  });
+
+  let incomeCents = 0;
+  let expenseCents = 0;
+  const monthMap = new Map<string, HistoryMonthRow>();
+
+  for (const row of inScope) {
+    const { year: rowYear, month: rowMonth } = ledgerMonthOf(row.date);
+    const key = `${rowYear}-${rowMonth}`;
+    let bucket = monthMap.get(key);
+    if (!bucket) {
+      bucket = {
+        year: rowYear,
+        month: rowMonth,
+        label: `${MONTH_NAMES[rowMonth - 1]} de ${rowYear}`,
+        incomeCents: 0,
+        expenseCents: 0,
+        balanceCents: 0,
+        transactionCount: 0,
+      };
+      monthMap.set(key, bucket);
+    }
+
+    if (row.type === "ENTRADA") {
+      incomeCents += row.amountCents;
+      bucket.incomeCents += row.amountCents;
+    } else {
+      expenseCents += row.amountCents;
+      bucket.expenseCents += row.amountCents;
+    }
+    bucket.transactionCount += 1;
   }
 
-  // Filtrar transações pela conta
-  const filteredTransactions = overview.transactions.filter((tx) => tx.accountId === accountId);
+  const months = Array.from(monthMap.values())
+    .map((row) => ({ ...row, balanceCents: row.incomeCents - row.expenseCents }))
+    .sort((a, b) => b.year - a.year || b.month - a.month);
 
-  // Recalcular totais baseado nas transações filtradas
-  const filteredTotals = summarizeTransactions(filteredTransactions);
-
-  // Calcular saldo inicial apenas dessa conta
-  const account = overview.accounts.find((a) => a.id === accountId);
-  const accountOpeningBalance = account?.balanceCents ?? 0;
-
-  // Recalcular fluxo diário
-  const filteredDailyFlow = buildDailyFlow(filteredTransactions, year, month, accountOpeningBalance);
-
-  // Recalcular breakdown por categoria
-  const filteredExpensesByCategory = breakdownByCategory(filteredTransactions, overview.categories, "SAIDA");
-  const filteredIncomeByCategory = breakdownByCategory(filteredTransactions, overview.categories, "ENTRADA");
-
-  // Filtrar recorrências dessa conta
-  const filteredRecurrences = overview.recurrences.filter((r) => r.accountId === accountId);
-
-  // ✅ CRÍTICO: Retornar APENAS a conta filtrada, não todas as contas
-  // Assim, quando a página calcular `totalCash`, só somará essa conta
-  const filteredAccounts = account ? [account] : [];
+  const balanceCents = incomeCents - expenseCents;
 
   return {
-    ...overview,
-    totals: filteredTotals,
-    openingCents: accountOpeningBalance,
-    closingCents: accountOpeningBalance + filteredTotals.balanceCents,
-    transactions: filteredTransactions,
-    dailyFlow: filteredDailyFlow,
-    expensesByCategory: filteredExpensesByCategory,
-    incomeByCategory: filteredIncomeByCategory,
-    accounts: filteredAccounts, // ✅ Apenas a conta filtrada! Usada para cálculos
-    allAccounts: overview.accounts, // ✅ NOVO: Todas as contas para exibição (AccountsManager)
-    recurrences: filteredRecurrences,
+    transactions: pageRows.map(toLedgerTransaction),
+    totals: {
+      incomeCents,
+      expenseCents,
+      balanceCents,
+      transactionCount: inScope.length,
+      savingsRate: incomeCents > 0 ? Math.round((balanceCents / incomeCents) * 100) : 0,
+      // O maior gasto do histórico exigiria a linha completa; a visão geral já
+      // destaca isso pelo resumo mensal, então aqui fica de fora de propósito.
+      biggestExpense: null,
+    },
+    page,
+    pageSize,
+    pageCount,
+    totalCount,
+    months,
+    availableYears,
+    firstDate: inScope.length > 0 ? inScope[0].date : null,
+    lastDate: inScope.length > 0 ? inScope[inScope.length - 1].date : null,
+    accounts: computeAccountBalancesFromTotals(
+      accountRows.map((a) => ({
+        id: a.id,
+        name: a.name,
+        type: a.type,
+        openingBalanceCents: a.openingBalanceCents,
+        color: a.color,
+        archived: a.archived,
+      })),
+      balanceTotals.map((row) => ({
+        accountId: row.accountId,
+        type: row.type,
+        amountCents: row._sum.amountCents ?? 0,
+        count: row._count._all,
+      }))
+    ),
+    categories: categoryRows.map((c) => ({
+      id: c.id,
+      name: c.name,
+      type: c.type,
+      color: c.color,
+    })),
   };
 }

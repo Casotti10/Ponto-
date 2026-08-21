@@ -9,18 +9,26 @@ import {
   Repeat,
   ArrowDownRight,
   ArrowUpRight,
+  CalendarX,
 } from "lucide-react";
-import { format } from "date-fns";
-import { ptBR } from "date-fns/locale";
 import { requireUser } from "@/lib/auth";
-import { getLedgerOverviewFiltered } from "@/lib/ledger-service";
-import { centsToBRL, centsToSignedBRL, MONTH_NAMES } from "@/lib/ledger-calc";
+import { getMonthlyLedger } from "@/lib/ledger-service";
+import {
+  centsToBRL,
+  centsToSignedBRL,
+  formatLedgerDate,
+  formatLedgerDay,
+  ledgerDayToISO,
+  MONTH_NAMES,
+} from "@/lib/ledger-calc";
+import { appDateString, appNow } from "@/lib/timezone";
 import { ledgerColors } from "@/lib/chart-colors";
 import { cn } from "@/lib/utils";
 import { StatCard } from "@/components/dashboard/stat-card";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { LedgerViewTabs } from "@/components/ledger/ledger-view-tabs";
 import { LedgerPeriodPicker } from "@/components/ledger/ledger-period-picker";
 import { AccountFilter } from "@/components/ledger/account-filter";
 import { MonthlySummary } from "@/components/ledger/monthly-summary";
@@ -28,6 +36,7 @@ import { TransactionFormDialog } from "@/components/ledger/transaction-form-dial
 import { TransactionRowActions } from "@/components/ledger/transaction-row-actions";
 import { CashflowChart, type CashflowPoint } from "@/components/ledger/cashflow-chart";
 import { YearBalanceChart, type YearBalancePoint } from "@/components/ledger/year-balance-chart";
+import { ExpensePieChart } from "@/components/ledger/expense-pie-chart";
 import { CategoryBreakdown } from "@/components/ledger/category-breakdown";
 import { AccountsManager } from "@/components/ledger/accounts-manager";
 import { CategoriesManager } from "@/components/ledger/categories-manager";
@@ -35,6 +44,14 @@ import { RecurringManager } from "@/components/ledger/recurring-manager";
 import { FinancialExportButtons } from "@/components/ledger/ledger-export-buttons";
 import type { ExportTable } from "@/lib/export-utils";
 
+/**
+ * VISÃO MENSAL do razão financeiro.
+ *
+ * O período vem da URL (?year=&month=) e vira cláusula `where` no Prisma. Cada
+ * troca de mês é uma requisição nova a este Server Component e, portanto, uma
+ * consulta nova ao banco: nada do mês anterior chega ao cliente para depois ser
+ * escondido. O histórico completo mora na rota irmã /financeiro/geral.
+ */
 export default async function FinanceiroPage({
   searchParams,
 }: {
@@ -42,27 +59,40 @@ export default async function FinanceiroPage({
 }) {
   const user = await requireUser();
   const params = await searchParams;
-  const now = new Date();
 
-  const year = Number(params.year) || now.getFullYear();
-  const month = Math.min(12, Math.max(1, Number(params.month) || now.getMonth() + 1));
+  // `appNow` e não `new Date()`: o servidor roda em UTC na Vercel, então às
+  // 22h de 31/08 em São Paulo o relógio do processo já está em 01/09 e a tela
+  // abriria em setembro para quem ainda está em agosto.
+  const now = appNow();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1;
+
+  const year = Number(params.year) || currentYear;
+  const month = Math.min(12, Math.max(1, Number(params.month) || currentMonth));
   const accountId = params.accountId || null;
 
-  const overview = await getLedgerOverviewFiltered(user.id, year, month, accountId, now);
-  const { totals, transactions, accounts, allAccounts, categories, recurrences } = overview;
+  const ledger = await getMonthlyLedger(user.id, year, month, accountId, now);
+  const { totals, transactions, accounts, allAccounts, categories, recurrences } = ledger;
 
-  // ✅ CORRIGIDO: Use allAccounts para o manager (sempre tem todas)
-  // e accounts (filtradas) apenas para cálculos de totalCash
-  const accountsForManager = allAccounts || accounts; // Fallback para compatibilidade
   const activeAccounts = accounts.filter((a) => !a.archived);
-  const accountOptions = activeAccounts.map((a) => ({ id: a.id, name: a.name }));
+  const accountOptions = allAccounts
+    .filter((a) => !a.archived)
+    .map((a) => ({ id: a.id, name: a.name }));
 
-  // ✅ CRÍTICO: Agora totalCash respeita o filtro!
-  // Se há filtro: soma apenas a conta filtrada
-  // Se não há filtro: soma todas as contas (accounts === allAccounts)
+  // "Dinheiro em caixa" segue o filtro: com um banco selecionado, soma só ele.
   const totalCash = activeAccounts.reduce((acc, a) => acc + a.balanceCents, 0);
 
-  const cashflowData: CashflowPoint[] = overview.dailyFlow.map((point) => ({
+  const periodLabel = `${MONTH_NAMES[month - 1]} de ${year}`;
+  const isCurrentPeriod = year === currentYear && month === currentMonth;
+
+  // A data que o formulário assume ao abrir. No mês corrente é hoje; em
+  // qualquer outro mês é o dia 1º DAQUELE mês — registrar com setembro na tela
+  // tem que produzir um lançamento de setembro.
+  const defaultDate = isCurrentPeriod
+    ? appDateString(now)
+    : `${year}-${String(month).padStart(2, "0")}-01`;
+
+  const cashflowData: CashflowPoint[] = ledger.dailyFlow.map((point) => ({
     day: point.day,
     label: point.label,
     incomeCents: point.incomeCents,
@@ -70,7 +100,7 @@ export default async function FinanceiroPage({
     runningCents: point.runningCents,
   }));
 
-  const yearData: YearBalancePoint[] = overview.yearSeries.map((point) => ({
+  const yearData: YearBalancePoint[] = ledger.yearSeries.map((point) => ({
     label: point.label,
     incomeCents: point.incomeCents,
     expenseCents: point.expenseCents,
@@ -82,7 +112,7 @@ export default async function FinanceiroPage({
     sheetName: "Lançamentos",
     headers: ["Data", "Descrição", "Tipo", "Categoria", "Conta", "Valor"],
     rows: transactions.map((tx) => [
-      tx.date.toLocaleDateString("pt-BR"),
+      formatLedgerDate(tx.date),
       tx.description,
       tx.type === "ENTRADA" ? "Entrada" : "Saída",
       tx.categoryName ?? "Sem categoria",
@@ -92,22 +122,11 @@ export default async function FinanceiroPage({
   };
 
   const isPositive = totals.balanceCents >= 0;
+  const isEmpty = transactions.length === 0;
 
-  // Calcular comparação com mês anterior
-  const previousMonth = month === 1 ? 12 : month - 1;
-  const previousYear = month === 1 ? year - 1 : year;
-  const previousMonthOverview = await getLedgerOverviewFiltered(
-    user.id,
-    previousYear,
-    previousMonth,
-    accountId,
-    now
-  );
-  const previousMonthBalance = previousMonthOverview.totals.balanceCents;
-
-  // Determinar conta selecionada para exibição
-  const selectedAccount = accountId ? accounts.find((a) => a.id === accountId) : null;
-  const accountLabel = selectedAccount ? `${selectedAccount.name}` : "Todos os bancos";
+  const selectedAccount = accountId ? allAccounts.find((a) => a.id === accountId) : null;
+  const periodQuery = new URLSearchParams({ year: String(year), month: String(month) });
+  if (accountId) periodQuery.set("accountId", accountId);
 
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-6">
@@ -117,44 +136,50 @@ export default async function FinanceiroPage({
             <Wallet className="h-6 w-6" /> Financeiro
           </h1>
           <p className="text-muted-foreground">
-            Suas entradas e saídas de {MONTH_NAMES[month - 1].toLowerCase()} {accountId && `· ${accountLabel}`}.
+            Lançamentos de {periodLabel.toLowerCase()}
+            {selectedAccount && ` · ${selectedAccount.name}`}.
           </p>
         </div>
+        <TransactionFormDialog
+          accounts={accountOptions}
+          categories={categories}
+          defaultDate={defaultDate}
+          trigger={<Button className="gap-1.5 sm:w-fit" />}
+        >
+          <Plus className="h-4 w-4" /> Novo lançamento
+        </TransactionFormDialog>
+      </div>
+
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <LedgerViewTabs active="mensal" overviewHref={`/financeiro/geral?${periodQuery}`} />
         <div className="flex flex-wrap items-center gap-2">
-          <AccountFilter accounts={accounts} />
+          <AccountFilter accounts={allAccounts} />
           <LedgerPeriodPicker
             year={year}
             month={month}
-            currentYear={now.getFullYear()}
-            currentMonth={now.getMonth() + 1}
+            currentYear={currentYear}
+            currentMonth={currentMonth}
           />
-          <TransactionFormDialog
-            accounts={accountOptions}
-            categories={categories}
-            trigger={<Button className="gap-1.5" />}
-          >
-            <Plus className="h-4 w-4" /> Novo lançamento
-          </TransactionFormDialog>
         </div>
       </div>
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard
-          label="Entradas do mês"
+          label={`Entradas · ${MONTH_NAMES[month - 1]}`}
           value={centsToBRL(totals.incomeCents)}
           icon={ArrowUpRight}
           tone="good"
           iconColor={ledgerColors.light.income}
         />
         <StatCard
-          label="Saídas do mês"
+          label={`Saídas · ${MONTH_NAMES[month - 1]}`}
           value={centsToBRL(totals.expenseCents)}
           icon={ArrowDownRight}
           tone={totals.expenseCents > 0 ? "bad" : "neutral"}
           iconColor={ledgerColors.light.expense}
         />
         <StatCard
-          label="Saldo do mês"
+          label={`Saldo · ${MONTH_NAMES[month - 1]}`}
           value={centsToSignedBRL(totals.balanceCents)}
           icon={isPositive ? TrendingUp : TrendingDown}
           tone={isPositive ? "good" : "bad"}
@@ -175,89 +200,50 @@ export default async function FinanceiroPage({
         />
       </div>
 
-      {transactions.length === 0 ? (
-        <Card className="border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950">
-          <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
-            <p className="text-sm font-medium text-amber-900 dark:text-amber-100">
-              Nenhum lançamento neste período
-            </p>
-            <p className="text-xs text-amber-800 dark:text-amber-200">
-              Selecione outro banco ou período, ou registre a primeira movimentação.
+      {isEmpty && (
+        <Card className="border-dashed">
+          <CardContent className="flex flex-col items-center gap-3 py-10 text-center">
+            <CalendarX className="h-8 w-8 text-muted-foreground/50" aria-hidden />
+            <p className="text-sm font-medium">Nenhum lançamento em {periodLabel}</p>
+            <p className="max-w-md text-xs text-muted-foreground">
+              {selectedAccount
+                ? `Não há movimentações de ${selectedAccount.name} neste período. Escolha outro banco, mude o mês ou registre a primeira.`
+                : "Escolha outro mês no seletor acima ou registre a primeira movimentação deste período."}
             </p>
             <TransactionFormDialog
               accounts={accountOptions}
               categories={categories}
-              trigger={<Button variant="outline" size="sm" className="gap-1.5 mt-2" />}
+              defaultDate={defaultDate}
+              trigger={<Button variant="outline" size="sm" className="mt-1 gap-1.5" />}
             >
-              <Plus className="h-4 w-4" /> Novo lançamento
+              <Plus className="h-4 w-4" /> Lançar em {MONTH_NAMES[month - 1]}
             </TransactionFormDialog>
           </CardContent>
         </Card>
-      ) : (
-        <>
-          <MonthlySummary
-            totals={totals}
-            transactions={transactions}
-            openingCents={overview.openingCents}
-            closingCents={overview.closingCents}
-            previousMonthBalance={previousMonthBalance}
-          />
-
-          <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-            <Card className="xl:col-span-2">
-              <CardHeader>
-                <CardTitle>Fluxo de caixa</CardTitle>
-                <CardDescription>
-                  Entradas e saídas por dia, com o saldo acumulado partindo de{" "}
-                  {centsToBRL(overview.openingCents)} — quanto você já tinha no começo do mês.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <CashflowChart data={cashflowData} />
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Maior gasto</CardTitle>
-                <CardDescription>Do mês selecionado</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {totals.biggestExpense ? (
-                  <div className="space-y-4">
-                    <div className="rounded-lg border p-3">
-                      <p className="text-xs text-muted-foreground">Descrição</p>
-                      <p className="truncate text-sm font-medium">{totals.biggestExpense.description}</p>
-                    </div>
-                    <div className="rounded-lg border p-3">
-                      <p className="text-xs text-muted-foreground">Valor</p>
-                      <p className="text-lg font-semibold text-red-600 dark:text-red-400">
-                        {centsToBRL(totals.biggestExpense.amountCents)}
-                      </p>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="py-8 text-center text-sm text-muted-foreground">
-                    Nenhuma saída neste período
-                  </p>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-        </>
       )}
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      {/* O resumo aparece sempre, inclusive zerado: ele descreve o mês
+          selecionado, e "não houve movimento" também é uma resposta sobre ele. */}
+      <MonthlySummary
+        totals={totals}
+        transactions={transactions}
+        openingCents={ledger.openingCents}
+        closingCents={ledger.closingCents}
+        previousMonthBalance={ledger.previousNetCents}
+      />
+
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Para onde foi o dinheiro</CardTitle>
-            <CardDescription>Saídas do mês por categoria</CardDescription>
+            <CardTitle className="flex items-center gap-2">
+              <Tags className="h-4 w-4" /> Para onde foi o dinheiro
+            </CardTitle>
+            <CardDescription>
+              Proporção das saídas de {periodLabel.toLowerCase()} por categoria.
+            </CardDescription>
           </CardHeader>
           <CardContent>
-            <CategoryBreakdown
-              items={overview.expensesByCategory}
-              emptyLabel="Nenhuma saída registrada neste mês."
-            />
+            <ExpensePieChart items={ledger.expensesByCategory} monthLabel={periodLabel} />
           </CardContent>
         </Card>
 
@@ -268,9 +254,51 @@ export default async function FinanceiroPage({
           </CardHeader>
           <CardContent>
             <CategoryBreakdown
-              items={overview.incomeByCategory}
-              emptyLabel="Nenhuma entrada registrada neste mês."
+              items={ledger.incomeByCategory}
+              emptyLabel={`Nenhuma entrada registrada em ${periodLabel.toLowerCase()}.`}
             />
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+        <Card className="xl:col-span-2">
+          <CardHeader>
+            <CardTitle>Fluxo de caixa</CardTitle>
+            <CardDescription>
+              Entradas e saídas por dia, com o saldo acumulado partindo de{" "}
+              {centsToBRL(ledger.openingCents)} — quanto você já tinha no começo do mês.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <CashflowChart data={cashflowData} />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Maior gasto</CardTitle>
+            <CardDescription>De {periodLabel.toLowerCase()}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {totals.biggestExpense ? (
+              <div className="space-y-4">
+                <div className="rounded-lg border p-3">
+                  <p className="text-xs text-muted-foreground">Descrição</p>
+                  <p className="truncate text-sm font-medium">{totals.biggestExpense.description}</p>
+                </div>
+                <div className="rounded-lg border p-3">
+                  <p className="text-xs text-muted-foreground">Valor</p>
+                  <p className="text-lg font-semibold text-red-600 dark:text-red-400">
+                    {centsToBRL(totals.biggestExpense.amountCents)}
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <p className="py-8 text-center text-sm text-muted-foreground">
+                Nenhuma saída neste período
+              </p>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -290,30 +318,24 @@ export default async function FinanceiroPage({
       <Card>
         <CardHeader className="flex-row items-center justify-between space-y-0">
           <div>
-            <CardTitle>Lançamentos</CardTitle>
+            <CardTitle>Lançamentos de {periodLabel}</CardTitle>
             <CardDescription>
-              {totals.transactionCount} lançamento(s) em {MONTH_NAMES[month - 1]}
+              {totals.transactionCount} lançamento(s) neste período
             </CardDescription>
           </div>
           <FinancialExportButtons
             table={exportTable}
             filename={`financeiro-${year}-${String(month).padStart(2, "0")}`}
-            title={`Lançamentos — ${MONTH_NAMES[month - 1]}/${year}`}
+            title={`Lançamentos — ${periodLabel}`}
           />
         </CardHeader>
         <CardContent>
-          {transactions.length === 0 ? (
+          {isEmpty ? (
             <div className="flex flex-col items-center gap-3 py-12 text-center">
+              <CalendarX className="h-8 w-8 text-muted-foreground/50" aria-hidden />
               <p className="text-sm text-muted-foreground">
-                Nenhum lançamento neste mês. Registre a primeira entrada ou saída.
+                Nenhum lançamento em {periodLabel}.
               </p>
-              <TransactionFormDialog
-                accounts={accountOptions}
-                categories={categories}
-                trigger={<Button variant="outline" className="gap-1.5" />}
-              >
-                <Plus className="h-4 w-4" /> Novo lançamento
-              </TransactionFormDialog>
             </div>
           ) : (
             <div className="max-h-140 divide-y overflow-auto rounded-lg border">
@@ -340,7 +362,7 @@ export default async function FinanceiroPage({
                       )}
                     </p>
                     <p className="truncate text-xs text-muted-foreground">
-                      {format(tx.date, "dd 'de' MMM", { locale: ptBR })}
+                      {formatLedgerDay(tx.date)}
                       {!accountId && ` · ${tx.accountName}`}
                     </p>
                   </div>
@@ -377,7 +399,7 @@ export default async function FinanceiroPage({
                     isRecurring={!!tx.recurringId}
                     transaction={{
                       id: tx.id,
-                      date: format(tx.date, "yyyy-MM-dd"),
+                      date: ledgerDayToISO(tx.date),
                       description: tx.description,
                       amount: (tx.amountCents / 100).toFixed(2).replace(".", ","),
                       type: tx.type,
@@ -404,7 +426,9 @@ export default async function FinanceiroPage({
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <AccountsManager accounts={accounts} />
+            {/* Sempre todas as contas: o filtro de banco recorta o que se está
+                analisando, não o que se pode administrar. */}
+            <AccountsManager accounts={allAccounts} />
           </CardContent>
         </Card>
 
@@ -440,7 +464,7 @@ export default async function FinanceiroPage({
       </Card>
 
       <p className="pb-6 text-center text-xs text-muted-foreground">
-        Ponto+ · Controle financeiro pessoal · {now.getFullYear()}
+        Ponto+ · Controle financeiro pessoal · {currentYear}
       </p>
     </div>
   );

@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState, useTransition, type ReactElement, type ReactNode } from "react";
-import { format } from "date-fns";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -20,7 +19,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { saveTransaction } from "@/lib/actions/ledger";
-import { centsToBRL, parseAmountToCents } from "@/lib/ledger-calc";
+import { centsToBRL, parseAmountToCents, MONTH_NAMES } from "@/lib/ledger-calc";
+import { appDateString } from "@/lib/timezone";
 
 export interface TransactionFormValues {
   id?: string;
@@ -40,6 +40,13 @@ interface Props {
   trigger?: ReactElement;
   children?: ReactNode;
   initialValues?: TransactionFormValues;
+  /**
+   * Data que o formulário assume ao abrir para um lançamento novo, em
+   * `yyyy-MM-dd`. A página manda o período que está na tela — sem isso o
+   * formulário cairia sempre em "hoje", e um lançamento registrado com
+   * setembro aberto seria salvo em agosto e sumiria da lista.
+   */
+  defaultDate?: string;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
 }
@@ -50,6 +57,7 @@ export function TransactionFormDialog({
   trigger,
   children,
   initialValues,
+  defaultDate,
   open: openProp,
   onOpenChange,
 }: Props) {
@@ -60,10 +68,27 @@ export function TransactionFormDialog({
   const open = openProp ?? openState;
   const setOpen = onOpenChange ?? setOpenState;
 
+  const fallbackDate = initialValues?.date ?? defaultDate ?? appDateString();
+
   // O tipo é controlado porque ele filtra as categorias: quem está lançando uma
   // despesa não deve ver "Salário" na lista.
   const [type, setType] = useState<"ENTRADA" | "SAIDA">(initialValues?.type ?? "SAIDA");
   const [amount, setAmount] = useState(initialValues?.amount ?? "");
+  // A data é controlada para que o aviso de destino ("Aparece em Setembro de
+  // 2026") acompanhe o campo enquanto o usuário digita.
+  const [date, setDate] = useState(fallbackDate);
+
+  // Reancoragem no padrão "ajustar estado durante a renderização" (e não num
+  // efeito, que dispararia uma renderização em cascata): cada abertura do
+  // diálogo, e cada mudança do período da tela, recoloca o campo na data certa.
+  // Sem isso, quem abre em agosto, fecha, navega para setembro e abre de novo
+  // continuaria vendo agosto no campo.
+  const anchor = `${open}:${fallbackDate}`;
+  const [lastAnchor, setLastAnchor] = useState(anchor);
+  if (lastAnchor !== anchor) {
+    setLastAnchor(anchor);
+    setDate(fallbackDate);
+  }
 
   const availableCategories = useMemo(
     () => categories.filter((c) => c.type === type),
@@ -85,6 +110,14 @@ export function TransactionFormDialog({
   );
 
   const parsedCents = parseAmountToCents(amount);
+
+  // Em que mês este lançamento vai cair. É a informação que faltava: o destino
+  // depende da DATA, não do mês que está aberto na tela.
+  const targetPeriod = useMemo(() => {
+    const [year, month] = date.split("-").map(Number);
+    if (!year || !month || month < 1 || month > 12) return null;
+    return `${MONTH_NAMES[month - 1]} de ${year}`;
+  }, [date]);
 
   function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -161,14 +194,18 @@ export function TransactionFormDialog({
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="date">Data</Label>
+                <Label htmlFor="date">Data do lançamento</Label>
                 <Input
                   id="date"
                   name="date"
                   type="date"
                   required
-                  defaultValue={initialValues?.date ?? format(new Date(), "yyyy-MM-dd")}
+                  value={date}
+                  onChange={(e) => setDate(e.target.value)}
                 />
+                <p className="text-xs text-muted-foreground">
+                  {targetPeriod ? `Aparece em ${targetPeriod}` : "Data inválida"}
+                </p>
               </div>
             </div>
 

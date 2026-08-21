@@ -45,6 +45,75 @@ export function signedCents(tx: { amountCents: number; type: TransactionTypeLike
   return tx.type === "ENTRADA" ? tx.amountCents : -tx.amountCents;
 }
 
+/* ------------------------------ o dia contábil ----------------------------- */
+
+/**
+ * SEGUNDA REGRA DE OURO: um lançamento pertence a um DIA DE CALENDÁRIO, não a
+ * um instante.
+ *
+ * `new Date("2026-08-01T00:00:00")` resolve a string no fuso do PROCESSO — UTC
+ * na Vercel, `America/Sao_Paulo` na máquina de desenvolvimento. O mesmo
+ * lançamento passa a ocupar instantes diferentes conforme onde foi gravado, e a
+ * janela do mês, montada do mesmo jeito no fuso do processo, deixa de bater com
+ * ele: um lançamento do dia 1º gravado em produção (00:00Z) cai em JULHO quando
+ * lido de uma máquina em São Paulo, cuja janela de agosto começa às 03:00Z.
+ *
+ * As funções abaixo tiram o fuso da conta: o dia é sempre meia-noite UTC, a
+ * janela do mês é sempre UTC e a leitura usa os getters UTC. Escrita e leitura
+ * concordam em qualquer ambiente — é isso que faz a separação mensal ser uma
+ * propriedade do DADO, e não do servidor que respondeu à requisição.
+ *
+ * Difere de `src/lib/timezone.ts` de propósito: lá o que importa é o relógio de
+ * parede do usuário (que hora ele bateu o ponto); aqui não existe hora, só a
+ * data que ele digitou no formulário.
+ */
+export function ledgerDayFromISO(value: string): Date {
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day));
+}
+
+/** Inverso de `ledgerDayFromISO` — o formato que o `<input type="date">` espera. */
+export function ledgerDayToISO(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+/**
+ * Janela `[start, end]` de um mês. É esse par que vai para o `where` do Prisma:
+ * o recorte mensal acontece no banco, não em memória.
+ */
+export function ledgerMonthRange(year: number, month: number) {
+  return {
+    start: new Date(Date.UTC(year, month - 1, 1)),
+    // Último milissegundo do mês: `Date.UTC(year, month, 1)` já é o 1º do mês
+    // seguinte, então voltar 1ms fecha o intervalo sem depender de quantos dias
+    // o mês tem.
+    end: new Date(Date.UTC(year, month, 1) - 1),
+  };
+}
+
+/** Janela `[start, end]` de um ano inteiro, mesma convenção. */
+export function ledgerYearRange(year: number) {
+  return {
+    start: new Date(Date.UTC(year, 0, 1)),
+    end: new Date(Date.UTC(year + 1, 0, 1) - 1),
+  };
+}
+
+/** Dia do mês do lançamento, lido na mesma convenção em que foi gravado. */
+export function ledgerDayOfMonth(date: Date) {
+  return date.getUTCDate();
+}
+
+/** Mês/ano a que o lançamento pertence — a chave da separação mensal. */
+export function ledgerMonthOf(date: Date) {
+  return { year: date.getUTCFullYear(), month: date.getUTCMonth() + 1 };
+}
+
+/** Quantidade de dias do mês, sem depender do fuso do processo. */
+export function ledgerDaysInMonth(year: number, month: number) {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
 export interface PeriodTotals {
   incomeCents: number;
   expenseCents: number;
@@ -106,7 +175,7 @@ export function buildDailyFlow(
   month: number,
   startingCents = 0
 ): DailyFlowPoint[] {
-  const daysInMonth = new Date(year, month, 0).getDate();
+  const daysInMonth = ledgerDaysInMonth(year, month);
   const points: DailyFlowPoint[] = Array.from({ length: daysInMonth }, (_, i) => ({
     day: i + 1,
     label: String(i + 1),
@@ -117,7 +186,7 @@ export function buildDailyFlow(
   }));
 
   for (const tx of transactions) {
-    const index = tx.date.getDate() - 1;
+    const index = ledgerDayOfMonth(tx.date) - 1;
     if (index < 0 || index >= points.length) continue;
     if (tx.type === "ENTRADA") points[index].incomeCents += tx.amountCents;
     else points[index].expenseCents += tx.amountCents;
@@ -222,6 +291,38 @@ export function computeAccountBalances(
   });
 }
 
+/**
+ * Mesma conta de `computeAccountBalances`, mas a partir de totais já somados
+ * pelo banco (`groupBy` por conta e tipo).
+ *
+ * Existe para não trazer a tabela inteira de lançamentos para a memória só para
+ * somar: o saldo de uma conta é histórico, então o recorte "todos os
+ * lançamentos até o fim do mês" cresce para sempre. O `groupBy` devolve uma
+ * linha por conta/tipo e o custo para de acompanhar o tamanho do histórico.
+ */
+export function computeAccountBalancesFromTotals(
+  accounts: AccountLike[],
+  totals: { accountId: string; type: TransactionTypeLike; amountCents: number; count: number }[]
+): AccountBalance[] {
+  const byAccount = new Map<string, { total: number; count: number }>();
+
+  for (const row of totals) {
+    const entry = byAccount.get(row.accountId) ?? { total: 0, count: 0 };
+    entry.total += signedCents(row);
+    entry.count += row.count;
+    byAccount.set(row.accountId, entry);
+  }
+
+  return accounts.map((account) => {
+    const entry = byAccount.get(account.id);
+    return {
+      ...account,
+      balanceCents: account.openingBalanceCents + (entry?.total ?? 0),
+      transactionCount: entry?.count ?? 0,
+    };
+  });
+}
+
 export interface RecurrenceLike {
   id: string;
   frequency: "MENSAL" | "SEMANAL" | "ANUAL";
@@ -244,31 +345,32 @@ export interface RecurrenceLike {
 export function occurrencesInMonth(recurrence: RecurrenceLike, year: number, month: number): Date[] {
   if (!recurrence.active) return [];
 
-  const daysInMonth = new Date(year, month, 0).getDate();
+  const daysInMonth = ledgerDaysInMonth(year, month);
+  const dayOf = (day: number) => new Date(Date.UTC(year, month - 1, day));
   const candidates: Date[] = [];
 
   switch (recurrence.frequency) {
     case "MENSAL": {
-      candidates.push(new Date(year, month - 1, Math.min(recurrence.dayOfMonth, daysInMonth)));
+      candidates.push(dayOf(Math.min(recurrence.dayOfMonth, daysInMonth)));
       break;
     }
     case "ANUAL": {
       if (recurrence.monthOfYear === month) {
-        candidates.push(new Date(year, month - 1, Math.min(recurrence.dayOfMonth, daysInMonth)));
+        candidates.push(dayOf(Math.min(recurrence.dayOfMonth, daysInMonth)));
       }
       break;
     }
     case "SEMANAL": {
       for (let day = 1; day <= daysInMonth; day++) {
-        const date = new Date(year, month - 1, day);
-        if (date.getDay() === recurrence.weekday) candidates.push(date);
+        const date = dayOf(day);
+        if (date.getUTCDay() === recurrence.weekday) candidates.push(date);
       }
       break;
     }
   }
 
-  const start = startOfDayLocal(recurrence.startDate);
-  const end = recurrence.endDate ? startOfDayLocal(recurrence.endDate) : null;
+  const start = startOfLedgerDay(recurrence.startDate);
+  const end = recurrence.endDate ? startOfLedgerDay(recurrence.endDate) : null;
 
   return candidates.filter((date) => {
     if (date.getTime() < start.getTime()) return false;
@@ -277,8 +379,8 @@ export function occurrencesInMonth(recurrence: RecurrenceLike, year: number, mon
   });
 }
 
-function startOfDayLocal(date: Date) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+function startOfLedgerDay(date: Date) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 }
 
 /* ------------------------------- formatação ------------------------------ */
@@ -290,6 +392,26 @@ const compactFormatter = new Intl.NumberFormat("pt-BR", {
   notation: "compact",
   maximumFractionDigits: 1,
 });
+
+// `timeZone: "UTC"` não é detalhe: o dia contábil é gravado em meia-noite UTC,
+// então formatá-lo no fuso do processo exibiria "31 de jul" para um lançamento
+// de 1º de agosto em qualquer máquina a oeste de Greenwich.
+const dayMonthFormatter = new Intl.DateTimeFormat("pt-BR", {
+  timeZone: "UTC",
+  day: "2-digit",
+  month: "short",
+});
+const fullDateFormatter = new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" });
+
+/** "01 de ago" — rótulo curto da lista de lançamentos. */
+export function formatLedgerDay(date: Date) {
+  return dayMonthFormatter.format(date).replace(".", "");
+}
+
+/** "01/08/2026" — data completa, para exportações e a visão geral. */
+export function formatLedgerDate(date: Date) {
+  return fullDateFormatter.format(date);
+}
 
 export function centsToBRL(cents: number) {
   return currencyFormatter.format((Number.isFinite(cents) ? cents : 0) / 100);

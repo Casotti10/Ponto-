@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
-import { parseAmountToCents } from "@/lib/ledger-calc";
+import { ledgerDayFromISO, parseAmountToCents } from "@/lib/ledger-calc";
 import {
   accountSchema,
   categorySchema,
@@ -22,13 +22,14 @@ import type { FormResult } from "@/lib/actions/time-entries";
  * apagado por quem não é dono.
  */
 
-/** Converte "2026-08-03" para meia-noite LOCAL, e não UTC. */
-function parseLocalDate(value: string) {
-  return new Date(`${value}T00:00:00`);
-}
-
+/**
+ * A visão geral é uma rota própria e tem o seu próprio cache — revalidar só
+ * `/financeiro` deixaria o histórico exibindo um lançamento que acabou de ser
+ * apagado.
+ */
 function revalidateLedger() {
   revalidatePath("/financeiro");
+  revalidatePath("/financeiro/geral");
 }
 
 /* ------------------------------ Lançamentos ------------------------------ */
@@ -67,7 +68,10 @@ export async function saveTransaction(formData: FormData): Promise<FormResult> {
   }
 
   const data = {
-    date: parseLocalDate(date),
+    // `ledgerDayFromISO` grava o dia em meia-noite UTC. É o que faz o
+    // lançamento cair no mês que o usuário digitou independentemente do fuso do
+    // servidor que atendeu o formulário — ver a nota em `ledger-calc.ts`.
+    date: ledgerDayFromISO(date),
     description,
     amountCents: amount,
     type,
@@ -342,8 +346,8 @@ export async function saveRecurringTransaction(formData: FormData): Promise<Form
     accountId,
     categoryId: categoryId || null,
     amountCents: amount,
-    startDate: parseLocalDate(startDate),
-    endDate: endDate ? parseLocalDate(endDate) : null,
+    startDate: ledgerDayFromISO(startDate),
+    endDate: endDate ? ledgerDayFromISO(endDate) : null,
   };
 
   if (id) {
