@@ -125,8 +125,15 @@ export default async function FinanceiroPage({
   const isEmpty = transactions.length === 0;
 
   const selectedAccount = accountId ? allAccounts.find((a) => a.id === accountId) : null;
-  const periodQuery = new URLSearchParams({ year: String(year), month: String(month) });
-  if (accountId) periodQuery.set("accountId", accountId);
+
+  // O período viaja para a visão geral como `fromYear`/`fromMonth`, e não como
+  // `year`/`month`: lá `year` é o FILTRO de ano, e a visão geral tem que abrir
+  // mostrando tudo. Estes dois só existem para a viagem de volta.
+  const overviewQuery = new URLSearchParams({
+    fromYear: String(year),
+    fromMonth: String(month),
+  });
+  if (accountId) overviewQuery.set("accountId", accountId);
 
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-6">
@@ -151,7 +158,7 @@ export default async function FinanceiroPage({
       </div>
 
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <LedgerViewTabs active="mensal" overviewHref={`/financeiro/geral?${periodQuery}`} />
+        <LedgerViewTabs active="mensal" overviewHref={`/financeiro/geral?${overviewQuery}`} />
         <div className="flex flex-wrap items-center gap-2">
           <AccountFilter accounts={allAccounts} />
           <LedgerPeriodPicker

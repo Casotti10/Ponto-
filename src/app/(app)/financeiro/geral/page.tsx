@@ -43,13 +43,16 @@ export default async function FinanceiroGeralPage({
   searchParams,
 }: {
   searchParams: Promise<{
+    /** Filtro de ano desta tela. Ausente = todos os anos, que é o padrão. */
     year?: string;
-    month?: string;
     accountId?: string;
     categoryId?: string;
     type?: string;
     q?: string;
     page?: string;
+    /** Período de onde o usuário veio, só para a viagem de volta à visão mensal. */
+    fromYear?: string;
+    fromMonth?: string;
   }>;
 }) {
   const user = await requireUser();
@@ -73,10 +76,12 @@ export default async function FinanceiroGeralPage({
   const isPositive = totals.balanceCents >= 0;
   const isEmpty = totals.transactionCount === 0;
 
-  // Volta para a visão mensal no mês em que o usuário estava.
+  // Volta para a visão mensal no mês em que o usuário estava. `fromYear` e
+  // `fromMonth` viajam separados de `year` justamente para que abrir a visão
+  // geral não a deixe pré-filtrada pelo mês de origem.
   const backQuery = new URLSearchParams();
-  if (params.year) backQuery.set("year", params.year);
-  if (params.month) backQuery.set("month", params.month);
+  if (params.fromYear) backQuery.set("year", params.fromYear);
+  if (params.fromMonth) backQuery.set("month", params.fromMonth);
   if (params.accountId) backQuery.set("accountId", params.accountId);
   const monthlyHref = backQuery.toString() ? `/financeiro?${backQuery}` : "/financeiro";
 
