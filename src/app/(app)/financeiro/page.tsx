@@ -10,8 +10,10 @@ import {
   ArrowDownRight,
   ArrowUpRight,
   CalendarX,
+  FileUp,
 } from "lucide-react";
 import { requireUser } from "@/lib/auth";
+import { canImportLedger } from "@/lib/import-access";
 import { getMonthlyLedger } from "@/lib/ledger-service";
 import {
   centsToBRL,
@@ -33,6 +35,7 @@ import { LedgerPeriodPicker } from "@/components/ledger/ledger-period-picker";
 import { AccountFilter } from "@/components/ledger/account-filter";
 import { MonthlySummary } from "@/components/ledger/monthly-summary";
 import { TransactionFormDialog } from "@/components/ledger/transaction-form-dialog";
+import { ImportStatementDialog } from "@/components/ledger/import-statement-dialog";
 import { TransactionRowActions } from "@/components/ledger/transaction-row-actions";
 import { CashflowChart, type CashflowPoint } from "@/components/ledger/cashflow-chart";
 import { YearBalanceChart, type YearBalancePoint } from "@/components/ledger/year-balance-chart";
@@ -81,6 +84,10 @@ export default async function FinanceiroPage({
 
   // "Dinheiro em caixa" segue o filtro: com um banco selecionado, soma só ele.
   const totalCash = activeAccounts.reduce((acc, a) => acc + a.balanceCents, 0);
+
+  // A importação de extrato é restrita por allowlist (ver `import-access.ts`),
+  // e sem conta cadastrada não há destino possível para os lançamentos.
+  const canImport = canImportLedger(user.email) && accountOptions.length > 0;
 
   const periodLabel = `${MONTH_NAMES[month - 1]} de ${year}`;
   const isCurrentPeriod = year === currentYear && month === currentMonth;
@@ -147,14 +154,24 @@ export default async function FinanceiroPage({
             {selectedAccount && ` · ${selectedAccount.name}`}.
           </p>
         </div>
-        <TransactionFormDialog
-          accounts={accountOptions}
-          categories={categories}
-          defaultDate={defaultDate}
-          trigger={<Button className="gap-1.5 sm:w-fit" />}
-        >
-          <Plus className="h-4 w-4" /> Novo lançamento
-        </TransactionFormDialog>
+        <div className="flex flex-wrap items-center gap-2">
+          {canImport && (
+            <ImportStatementDialog
+              accounts={accountOptions}
+              trigger={<Button variant="outline" className="gap-1.5" />}
+            >
+              <FileUp className="h-4 w-4" /> Importar extrato
+            </ImportStatementDialog>
+          )}
+          <TransactionFormDialog
+            accounts={accountOptions}
+            categories={categories}
+            defaultDate={defaultDate}
+            trigger={<Button className="gap-1.5" />}
+          >
+            <Plus className="h-4 w-4" /> Novo lançamento
+          </TransactionFormDialog>
+        </div>
       </div>
 
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">

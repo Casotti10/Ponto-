@@ -345,16 +345,30 @@ model Transaction {
   recurring   RecurringTransaction? @relation(fields: [recurringId], references: [id], onDelete: SetNull)
   recurringId String?
 
+  /// Identidade do lançamento na ORIGEM, quando ele veio de um extrato
+  /// importado: o FITID do OFX ou, para CSV (que não tem id), uma impressão
+  /// digital determinística do próprio lançamento. É o que torna a importação
+  /// idempotente — reimportar o mesmo extrato não duplica nada.
+  /// Nulo em lançamento digitado à mão; no Postgres nulos não colidem entre si,
+  /// então a restrição única abaixo não atrapalha o cadastro manual.
+  externalId String?
+  importedAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   /// Garante que a materialização das recorrências seja idempotente: a mesma
   /// recorrência não pode gerar dois lançamentos para a mesma data.
   @@unique([recurringId, date])
+  /// Trava de idempotência da importação de extratos: o mesmo lançamento do
+  /// mesmo banco não entra duas vezes, nem em reimportação nem em extratos com
+  /// período sobreposto.
+  @@unique([accountId, externalId])
   @@index([userId, date])
   @@index([userId, type, date])
   @@index([accountId, date])
   @@index([categoryId])
+  @@index([userId, importedAt])
 }
 
 /// Modelo de lançamento que se repete (aluguel, salário, assinatura).
