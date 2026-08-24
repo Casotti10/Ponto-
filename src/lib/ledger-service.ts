@@ -236,6 +236,45 @@ export async function getBalanceBefore(
 }
 
 /** Saldo líquido (entradas − saídas) de um mês. Consulta agregada, sem trazer linhas. */
+export interface MonthTotalsCents {
+  incomeCents: number;
+  expenseCents: number;
+  balanceCents: number;
+}
+
+/**
+ * Entradas e saídas REALIZADAS de um mês. Base do comparativo entre períodos e
+ * da série anual — as duas perguntas falam de dinheiro que se moveu.
+ */
+export async function getMonthTotalsCents(
+  userId: string,
+  year: number,
+  month: number,
+  accountId: string | null = null
+): Promise<MonthTotalsCents> {
+  const { start, end } = ledgerMonthRange(year, month);
+
+  const rows = await prisma.transaction.groupBy({
+    by: ["type"],
+    where: {
+      userId,
+      date: { gte: start, lte: end },
+      status: "LIQUIDADO",
+      transferGroupId: null,
+      ...(accountId ? { accountId } : {}),
+    },
+    _sum: { amountCents: true },
+  });
+
+  let incomeCents = 0;
+  let expenseCents = 0;
+  for (const row of rows) {
+    if (row.type === "ENTRADA") incomeCents += row._sum.amountCents ?? 0;
+    else expenseCents += row._sum.amountCents ?? 0;
+  }
+
+  return { incomeCents, expenseCents, balanceCents: incomeCents - expenseCents };
+}
 export async function getMonthNetCents(
   userId: string,
   year: number,
@@ -281,6 +320,8 @@ export interface MonthlyLedger {
   closingCents: number;
   /** Saldo líquido do mês anterior, para a comparação do resumo. */
   previousNetCents: number;
+  /** Entradas e saídas do mês anterior, para o comparativo. */
+  previousTotals: MonthTotalsCents;
   transactions: LedgerTransaction[];
   dailyFlow: DailyFlowPoint[];
   expensesByCategory: CategoryBreakdownItem[];
@@ -423,7 +464,8 @@ export async function getMonthlyLedger(
 
   const previousMonth = month === 1 ? 12 : month - 1;
   const previousYear = month === 1 ? year - 1 : year;
-  const previousNetCents = await getMonthNetCents(userId, previousYear, previousMonth, accountId);
+  const previousTotals = await getMonthTotalsCents(userId, previousYear, previousMonth, accountId);
+  const previousNetCents = previousTotals.balanceCents;
 
   return {
     year,
@@ -432,6 +474,7 @@ export async function getMonthlyLedger(
     openingCents,
     closingCents: openingCents + totals.balanceCents,
     previousNetCents,
+    previousTotals,
     transactions,
     dailyFlow: buildDailyFlow(transactions, year, month, openingCents),
     expensesByCategory: breakdownByCategory(transactions, categories, "SAIDA"),
@@ -1114,4 +1157,106 @@ export async function getMonthlyInsights(
     cashCents,
     monthLabel: MONTH_NAMES[month - 1].toLowerCase(),
   });
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                 RELATÓRIOS                                 */
+/* -------------------------------------------------------------------------- */
+
+export interface YearMonthRow {
+  month: number;
+  label: string;
+  incomeCents: number;
+  expenseCents: number;
+  balanceCents: number;
+  /** Caixa ao fim do mês — a evolução patrimonial. */
+  accumulatedCents: number;
+}
+
+export interface ReportsView {
+  year: number;
+  months: YearMonthRow[];
+  totals: MonthTotalsCents;
+  expensesByCategory: CategoryBreakdownItem[];
+  incomeByCategory: CategoryBreakdownItem[];
+  /** Margem: quanto do que entrou sobrou, em %. */
+  marginPercent: number;
+  openingCents: number;
+}
+
+/**
+ * Relatório anual: os doze meses, o resultado consolidado e a quebra por
+ * categoria do ano inteiro.
+ *
+ * Uma consulta só traz o ano e tudo é agregado em memória — doze meses de
+ * lançamentos de uma pessoa cabem folgado, e doze consultas separadas custariam
+ * mais que a agregação.
+ */
+export async function getYearReport(
+  userId: string,
+  year: number,
+  accountId: string | null = null
+): Promise<ReportsView> {
+  await ensureLedgerBootstrap(userId);
+
+  const { start, end } = ledgerYearRange(year);
+  const accountScope = accountId ? { accountId } : {};
+
+  const [rows, categories, openingCents] = await Promise.all([
+    prisma.transaction.findMany({
+      where: {
+        userId,
+        date: { gte: start, lte: end },
+        status: "LIQUIDADO",
+        transferGroupId: null,
+        ...accountScope,
+      },
+      include: TRANSACTION_INCLUDE,
+      orderBy: { date: "asc" },
+    }),
+    prisma.category.findMany({
+      where: { userId },
+      select: { id: true, name: true, type: true, color: true },
+    }),
+    getBalanceBefore(userId, start, accountId),
+  ]);
+
+  const transactions = rows.map(toLedgerTransaction);
+
+  const months: YearMonthRow[] = Array.from({ length: 12 }, (_, i) => ({
+    month: i + 1,
+    label: MONTH_SHORT_NAMES[i],
+    incomeCents: 0,
+    expenseCents: 0,
+    balanceCents: 0,
+    accumulatedCents: 0,
+  }));
+
+  for (const tx of transactions) {
+    const index = ledgerMonthOf(tx.date).month - 1;
+    if (index < 0 || index > 11) continue;
+    if (tx.type === "ENTRADA") months[index].incomeCents += tx.amountCents;
+    else months[index].expenseCents += tx.amountCents;
+  }
+
+  let running = openingCents;
+  for (const row of months) {
+    row.balanceCents = row.incomeCents - row.expenseCents;
+    running += row.balanceCents;
+    row.accumulatedCents = running;
+  }
+
+  const incomeCents = months.reduce((sum, m) => sum + m.incomeCents, 0);
+  const expenseCents = months.reduce((sum, m) => sum + m.expenseCents, 0);
+  const balanceCents = incomeCents - expenseCents;
+
+  return {
+    year,
+    months,
+    totals: { incomeCents, expenseCents, balanceCents },
+    expensesByCategory: breakdownByCategory(transactions, categories, "SAIDA"),
+    incomeByCategory: breakdownByCategory(transactions, categories, "ENTRADA"),
+    marginPercent: incomeCents > 0 ? Math.round((balanceCents / incomeCents) * 100) : 0,
+    openingCents,
+  };
 }

@@ -48,6 +48,7 @@ import { CategoryBreakdown } from "@/components/ledger/category-breakdown";
 import { AccountsManager } from "@/components/ledger/accounts-manager";
 import { CategoriesManager } from "@/components/ledger/categories-manager";
 import { RecurringManager } from "@/components/ledger/recurring-manager";
+import { MonthComparison } from "@/components/ledger/month-comparison";
 import { FinancialInsights } from "@/components/ledger/financial-insights";
 import { FinancialExportButtons } from "@/components/ledger/ledger-export-buttons";
 import type { ExportTable } from "@/lib/export-utils";
@@ -95,6 +96,12 @@ export default async function FinanceiroPage({
   // A importação de extrato é restrita por allowlist (ver `import-access.ts`),
   // e sem conta cadastrada não há destino possível para os lançamentos.
   const canImport = canImportLedger(user.email) && accountOptions.length > 0;
+
+  const previousMonthIndex = month === 1 ? 12 : month - 1;
+  const previousYear = month === 1 ? year - 1 : year;
+  const previousLabel = `${MONTH_NAMES[previousMonthIndex - 1]}${
+    previousYear !== year ? ` de ${previousYear}` : ""
+  }`;
 
   const periodLabel = `${MONTH_NAMES[month - 1]} de ${year}`;
   const isCurrentPeriod = year === currentYear && month === currentMonth;
@@ -293,6 +300,13 @@ export default async function FinanceiroPage({
           hint="Caixa + a receber − a pagar"
         />
       </div>
+
+      <MonthComparison
+        current={totals}
+        previous={ledger.previousTotals}
+        currentLabel={MONTH_NAMES[month - 1]}
+        previousLabel={previousLabel}
+      />
 
       <FinancialInsights insights={insights} />
 

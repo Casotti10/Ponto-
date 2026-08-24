@@ -1,5 +1,12 @@
 import Link from "next/link";
-import { ArrowDownRight, ArrowUpRight, CalendarRange, List, Target } from "lucide-react";
+import {
+  ArrowDownRight,
+  ArrowUpRight,
+  CalendarRange,
+  FileBarChart2,
+  List,
+  Target,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -69,13 +76,24 @@ export function LedgerViewTabs({
 export function LedgerModuleNav({
   active,
 }: {
-  active: "lancamentos" | "a-pagar" | "a-receber" | "orcamentos";
+  active:
+    | "lancamentos"
+    | "a-pagar"
+    | "a-receber"
+    | "orcamentos"
+    | "relatorios";
 }) {
   const sections = [
     { key: "lancamentos" as const, href: "/financeiro", label: "Lançamentos", icon: CalendarRange },
     { key: "a-pagar" as const, href: "/financeiro/a-pagar", label: "A pagar", icon: ArrowDownRight },
     { key: "a-receber" as const, href: "/financeiro/a-receber", label: "A receber", icon: ArrowUpRight },
     { key: "orcamentos" as const, href: "/financeiro/orcamentos", label: "Orçamentos", icon: Target },
+    {
+      key: "relatorios" as const,
+      href: "/financeiro/relatorios",
+      label: "Relatórios",
+      icon: FileBarChart2,
+    },
   ];
 
   return (
