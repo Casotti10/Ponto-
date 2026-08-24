@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { requireUser } from "@/lib/auth";
 import { canImportLedger } from "@/lib/import-access";
-import { getMonthlyLedger } from "@/lib/ledger-service";
+import { getMonthlyInsights, getMonthlyLedger } from "@/lib/ledger-service";
 import {
   centsToBRL,
   centsToSignedBRL,
@@ -48,6 +48,7 @@ import { CategoryBreakdown } from "@/components/ledger/category-breakdown";
 import { AccountsManager } from "@/components/ledger/accounts-manager";
 import { CategoriesManager } from "@/components/ledger/categories-manager";
 import { RecurringManager } from "@/components/ledger/recurring-manager";
+import { FinancialInsights } from "@/components/ledger/financial-insights";
 import { FinancialExportButtons } from "@/components/ledger/ledger-export-buttons";
 import type { ExportTable } from "@/lib/export-utils";
 
@@ -80,6 +81,8 @@ export default async function FinanceiroPage({
 
   const ledger = await getMonthlyLedger(user.id, year, month, accountId, now);
   const { totals, transactions, accounts, allAccounts, categories, recurrences } = ledger;
+
+  const insights = await getMonthlyInsights(user.id, ledger, accountId);
 
   const activeAccounts = accounts.filter((a) => !a.archived);
   const accountOptions = allAccounts
@@ -290,6 +293,8 @@ export default async function FinanceiroPage({
           hint="Caixa + a receber − a pagar"
         />
       </div>
+
+      <FinancialInsights insights={insights} />
 
       {isEmpty && (
         <Card className="border-dashed">

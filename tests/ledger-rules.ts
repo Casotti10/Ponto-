@@ -12,6 +12,7 @@ import {
   ledgerDayFromWallClock,
   splitInstallments,
   installmentDueDates,
+  buildInsights,
   computeAccountBalances,
   breakdownByCategory,
   buildDailyFlow,
@@ -210,6 +211,62 @@ console.log("\n== vencimentos: dia 31 nao pode transbordar ==");
     datas.map((d) => d.toISOString().slice(0, 10)),
     ["2026-11-15", "2026-12-15", "2027-01-15", "2027-02-15"]
   );
+}
+
+console.log("\n== insights: so afirmam o que os dados sustentam ==");
+{
+  const base = {
+    totals: summarizeTransactions([], HOJE),
+    expensesByCategory: [],
+    previousExpensesByCategory: [],
+    previousExpenseCents: 0,
+    exceededBudgets: [],
+    cashCents: 0,
+    monthLabel: "agosto",
+  };
+  check("mes vazio nao gera insight nenhum", buildInsights(base).length, 0);
+
+  // Variacao menor que 5% e ruido, nao noticia.
+  const ruido = buildInsights({
+    ...base,
+    totals: { ...base.totals, expenseCents: 10200 },
+    previousExpenseCents: 10000,
+  });
+  check("variacao de 2% nao vira insight", ruido.some((i) => i.id === "variacao-despesas"), false);
+
+  const noticia = buildInsights({
+    ...base,
+    totals: { ...base.totals, expenseCents: 15000 },
+    previousExpenseCents: 10000,
+  });
+  check("variacao de 50% vira insight", noticia.some((i) => i.id === "variacao-despesas"), true);
+
+  // Divisao por zero: sem mes anterior nao ha percentual a calcular.
+  const semAnterior = buildInsights({
+    ...base,
+    totals: { ...base.totals, expenseCents: 50000 },
+    previousExpenseCents: 0,
+  });
+  check("sem mes anterior nao inventa percentual", semAnterior.some((i) => i.id === "variacao-despesas"), false);
+
+  const vencido = buildInsights({
+    ...base,
+    totals: { ...base.totals, overdueExpenseCents: 25000 },
+  });
+  check("vencido gera alerta", vencido[0].kind, "alerta");
+
+  const estourado = buildInsights({
+    ...base,
+    exceededBudgets: [{ name: "Alimentacao", overCents: 12000 }],
+  });
+  check("orcamento estourado gera alerta", estourado.some((i) => i.kind === "alerta"), true);
+
+  const projetadoRuim = buildInsights({
+    ...base,
+    totals: { ...base.totals, pendingExpenseCents: 80000 },
+    cashCents: 30000,
+  });
+  check("projetado negativo alerta", projetadoRuim.some((i) => i.id === "projetado-negativo"), true);
 }
 
 console.log(fails === 0 ? "\n>>> TODOS PASSARAM\n" : `\n>>> ${fails} FALHA(S)\n`);

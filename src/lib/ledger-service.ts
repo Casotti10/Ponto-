@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import {
   breakdownByCategory,
+  buildInsights,
   buildDailyFlow,
   computeAccountBalancesFromTotals,
   isCancelled,
@@ -19,6 +20,7 @@ import {
   MONTH_SHORT_NAMES,
   type AccountBalance,
   type CategoryBreakdownItem,
+  type Insight,
   type DailyFlowPoint,
   type PeriodTotals,
   type TransactionLike,
@@ -1049,4 +1051,67 @@ export async function getFinancialGoals(
       : null,
     reached: goal.currentCents >= goal.targetCents,
   }));
+}
+
+/**
+ * Monta os insights do mês.
+ *
+ * Recebe o razão já carregado em vez de consultá-lo de novo — a página acabou
+ * de fazer essa consulta, e repeti-la só para gerar texto seria pagar duas
+ * vezes pela mesma resposta. As únicas idas extras ao banco são o recorte de
+ * categorias do mês ANTERIOR e os orçamentos, que a visão mensal não carrega.
+ */
+export async function getMonthlyInsights(
+  userId: string,
+  ledger: MonthlyLedger,
+  accountId: string | null = null
+): Promise<Insight[]> {
+  const { year, month } = ledger;
+  const previous = month === 1 ? { year: year - 1, month: 12 } : { year, month: month - 1 };
+  const prevRange = ledgerMonthRange(previous.year, previous.month);
+  const accountScope = accountId ? { accountId } : {};
+
+  const [prevRows, prevCategories, budgets] = await Promise.all([
+    prisma.transaction.findMany({
+      where: {
+        userId,
+        date: { gte: prevRange.start, lte: prevRange.end },
+        status: "LIQUIDADO",
+        transferGroupId: null,
+        ...accountScope,
+      },
+      select: { amountCents: true, type: true, categoryId: true, date: true, id: true, description: true, accountId: true },
+    }),
+    prisma.category.findMany({
+      where: { userId },
+      select: { id: true, name: true, type: true, color: true },
+    }),
+    getBudgets(userId, year, month),
+  ]);
+
+  const previousExpenseCents = prevRows
+    .filter((r) => r.type === "SAIDA")
+    .reduce((sum, r) => sum + r.amountCents, 0);
+
+  const previousExpensesByCategory = breakdownByCategory(
+    prevRows.map((r) => ({ ...r, categoryId: r.categoryId })),
+    prevCategories,
+    "SAIDA"
+  );
+
+  const cashCents = ledger.accounts
+    .filter((a) => !a.archived)
+    .reduce((sum, a) => sum + a.balanceCents, 0);
+
+  return buildInsights({
+    totals: ledger.totals,
+    expensesByCategory: ledger.expensesByCategory,
+    previousExpensesByCategory,
+    previousExpenseCents,
+    exceededBudgets: budgets.lines
+      .filter((line) => line.exceeded)
+      .map((line) => ({ name: line.categoryName, overCents: line.spentCents - line.limitCents })),
+    cashCents,
+    monthLabel: MONTH_NAMES[month - 1].toLowerCase(),
+  });
 }

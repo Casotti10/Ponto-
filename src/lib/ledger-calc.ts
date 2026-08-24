@@ -693,3 +693,172 @@ export function installmentDueDates(firstDue: Date, count: number): Date[] {
     return new Date(Date.UTC(targetYear, normalizedMonth, Math.min(day, lastDay)));
   });
 }
+
+/* -------------------------------------------------------------------------- */
+/*                            Insights financeiros                            */
+/* -------------------------------------------------------------------------- */
+
+export interface Insight {
+  id: string;
+  kind: "alerta" | "atencao" | "informacao" | "positivo";
+  title: string;
+  detail: string;
+}
+
+export interface InsightInput {
+  totals: PeriodTotals;
+  expensesByCategory: CategoryBreakdownItem[];
+  previousExpensesByCategory: CategoryBreakdownItem[];
+  previousExpenseCents: number;
+  /** Categorias que estouraram o teto: nome e quanto passou. */
+  exceededBudgets: { name: string; overCents: number }[];
+  /** Caixa real de hoje, para projetar o fim do mês. */
+  cashCents: number;
+  monthLabel: string;
+}
+
+function pct(from: number, to: number): number | null {
+  if (from === 0) return null;
+  return Math.round(((to - from) / from) * 100);
+}
+
+/**
+ * Lê os números do mês e diz o que eles significam.
+ *
+ * REGRA: nada aqui inventa dado. Cada frase sai de uma conta sobre lançamentos
+ * que existem, e um insight que não tem base simplesmente não é gerado — é
+ * preferível a tela mostrar três observações verdadeiras a oito genéricas.
+ *
+ * A ordem é por urgência: o que exige ação hoje vem antes do que é só
+ * interessante saber.
+ */
+export function buildInsights(input: InsightInput): Insight[] {
+  const {
+    totals,
+    expensesByCategory,
+    previousExpensesByCategory,
+    previousExpenseCents,
+    exceededBudgets,
+    cashCents,
+    monthLabel,
+  } = input;
+
+  const insights: Insight[] = [];
+
+  /* --- o que exige ação --- */
+
+  if (totals.overdueExpenseCents > 0) {
+    insights.push({
+      id: "vencidos",
+      kind: "alerta",
+      title: `${centsToBRL(totals.overdueExpenseCents)} em contas vencidas`,
+      detail: "Já passaram do vencimento e continuam em aberto.",
+    });
+  }
+
+  for (const budget of exceededBudgets) {
+    insights.push({
+      id: `orcamento-${budget.name}`,
+      kind: "alerta",
+      title: `Orçamento de ${budget.name} estourado`,
+      detail: `${centsToBRL(budget.overCents)} acima do limite que você definiu.`,
+    });
+  }
+
+  const projetado = cashCents + totals.pendingIncomeCents - totals.pendingExpenseCents;
+  if (projetado < 0) {
+    insights.push({
+      id: "projetado-negativo",
+      kind: "alerta",
+      title: "Saldo projetado fica negativo",
+      detail: `Se tudo que está em aberto se confirmar, o caixa chega a ${centsToSignedBRL(projetado)}.`,
+    });
+  }
+
+  if (totals.pendingExpenseCents > 0 && totals.pendingExpenseCents > cashCents) {
+    insights.push({
+      id: "a-pagar-maior-que-caixa",
+      kind: "atencao",
+      title: "Contas a pagar somam mais que o caixa",
+      detail: `${centsToBRL(totals.pendingExpenseCents)} a pagar contra ${centsToBRL(cashCents)} disponíveis.`,
+    });
+  }
+
+  /* --- para onde o dinheiro foi --- */
+
+  const maiorCategoria = expensesByCategory[0];
+  if (maiorCategoria && maiorCategoria.totalCents > 0) {
+    insights.push({
+      id: "maior-categoria",
+      kind: "informacao",
+      title: `${maiorCategoria.name} é o maior gasto de ${monthLabel}`,
+      detail: `${centsToBRL(maiorCategoria.totalCents)}, ou ${maiorCategoria.percent}% de tudo que saiu.`,
+    });
+  }
+
+  if (totals.biggestExpense) {
+    insights.push({
+      id: "maior-despesa",
+      kind: "informacao",
+      title: "Maior despesa isolada",
+      detail: `${totals.biggestExpense.description} — ${centsToBRL(totals.biggestExpense.amountCents)}.`,
+    });
+  }
+
+  /* --- comparação com o mês anterior --- */
+
+  const variacao = pct(previousExpenseCents, totals.expenseCents);
+  if (variacao !== null && Math.abs(variacao) >= 5) {
+    const subiu = variacao > 0;
+    insights.push({
+      id: "variacao-despesas",
+      kind: subiu ? "atencao" : "positivo",
+      title: `Despesas ${subiu ? "subiram" : "caíram"} ${Math.abs(variacao)}% ante o mês anterior`,
+      detail: `${centsToBRL(previousExpenseCents)} → ${centsToBRL(totals.expenseCents)}.`,
+    });
+  }
+
+  // Categoria que mais variou em VALOR ABSOLUTO, não em percentual: uma
+  // categoria que foi de R$ 2 para R$ 6 subiu 200% e não interessa a ninguém.
+  const anteriorPorCategoria = new Map(
+    previousExpensesByCategory.map((c) => [c.categoryId ?? "__none__", c.totalCents])
+  );
+  let maiorAlta: { name: string; delta: number } | null = null;
+  for (const categoria of expensesByCategory) {
+    const antes = anteriorPorCategoria.get(categoria.categoryId ?? "__none__") ?? 0;
+    const delta = categoria.totalCents - antes;
+    if (delta > 0 && (!maiorAlta || delta > maiorAlta.delta)) {
+      maiorAlta = { name: categoria.name, delta };
+    }
+  }
+  if (maiorAlta && maiorAlta.delta > 0 && previousExpenseCents > 0) {
+    insights.push({
+      id: "categoria-em-alta",
+      kind: "atencao",
+      title: `${maiorAlta.name} foi o que mais aumentou`,
+      detail: `${centsToBRL(maiorAlta.delta)} a mais que no mês anterior.`,
+    });
+  }
+
+  /* --- o que foi bem --- */
+
+  if (totals.incomeCents > 0 && totals.savingsRate >= 10) {
+    insights.push({
+      id: "economia",
+      kind: "positivo",
+      title: `Você guardou ${totals.savingsRate}% do que entrou`,
+      detail: `Sobraram ${centsToBRL(totals.balanceCents)} de ${centsToBRL(totals.incomeCents)}.`,
+    });
+  }
+
+  if (totals.incomeCents > 0 && totals.balanceCents < 0) {
+    insights.push({
+      id: "mes-no-vermelho",
+      kind: "atencao",
+      title: `${monthLabel} fechou no vermelho`,
+      detail: `Saiu ${centsToBRL(Math.abs(totals.balanceCents))} a mais do que entrou.`,
+    });
+  }
+
+  return insights;
+}
