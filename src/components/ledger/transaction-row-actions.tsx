@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
-import { MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { Ban, MoreHorizontal, Pencil, RotateCcw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -24,7 +24,7 @@ import {
   TransactionFormDialog,
   type TransactionFormValues,
 } from "@/components/ledger/transaction-form-dialog";
-import { deleteTransaction } from "@/lib/actions/ledger";
+import { cancelTransaction, deleteTransaction, uncancelTransaction } from "@/lib/actions/ledger";
 
 export function TransactionRowActions({
   transaction,
@@ -40,6 +40,21 @@ export function TransactionRowActions({
   const [pending, startTransition] = useTransition();
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+
+  const cancelada = transaction.status === "CANCELADO";
+
+  function handleCancel() {
+    startTransition(async () => {
+      const result = cancelada
+        ? await uncancelTransaction(transaction.id)
+        : await cancelTransaction(transaction.id);
+      if (result.success) {
+        toast.success(cancelada ? "Lançamento reativado" : "Lançamento cancelado");
+      } else {
+        toast.error(result.error ?? "Não foi possível concluir");
+      }
+    });
+  }
 
   function handleDelete() {
     startTransition(async () => {
@@ -63,6 +78,17 @@ export function TransactionRowActions({
           <DropdownMenuItem onClick={() => setEditOpen(true)}>
             <Pencil className="mr-2 h-4 w-4" /> Editar
           </DropdownMenuItem>
+          <DropdownMenuItem onClick={handleCancel} disabled={pending}>
+            {cancelada ? (
+              <>
+                <RotateCcw className="mr-2 h-4 w-4" /> Reativar
+              </>
+            ) : (
+              <>
+                <Ban className="mr-2 h-4 w-4" /> Cancelar
+              </>
+            )}
+          </DropdownMenuItem>
           <DropdownMenuItem variant="destructive" onClick={() => setDeleteOpen(true)}>
             <Trash2 className="mr-2 h-4 w-4" /> Excluir
           </DropdownMenuItem>
@@ -84,7 +110,7 @@ export function TransactionRowActions({
             <AlertDialogDescription>
               {isRecurring
                 ? "Este lançamento veio de uma recorrência. Ao excluir, ele será recriado na próxima vez que você abrir este mês — para parar de vez, desative a recorrência."
-                : "Esta ação não pode ser desfeita. O saldo do mês será recalculado e a exclusão fica registrada no histórico."}
+                : "Esta ação não pode ser desfeita. Se a intenção é só tirar o lançamento das contas, prefira Cancelar — ele para de impactar qualquer saldo mas continua no histórico."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

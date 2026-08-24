@@ -727,7 +727,8 @@ export type BillFilter =
   | "vencidas"
   | "hoje"
   | "proximos7"
-  | "proximos30";
+  | "proximos30"
+  | "canceladas";
 
 export interface BillsIndicators {
   /** Tudo que ainda não foi liquidado, vencido ou não. */
@@ -779,7 +780,10 @@ export async function getBills(
   const in30 = addLedgerDays(today, 30);
 
   const emAberto = { in: ["PENDENTE", "AGENDADO"] as TransactionStatusLike[] };
-  const base = { userId, type, transferGroupId: null, status: { not: "CANCELADO" as const } };
+  // Cancelado fica FORA por padrão — não é conta a pagar, é conta desfeita —
+  // mas precisa ser alcançável, senão não haveria como reativá-la.
+  const base = { userId, type, transferGroupId: null };
+  const semCancelados = { ...base, status: { not: "CANCELADO" as const } };
 
   // O recorte da LISTA. Cada opção vira cláusula do Prisma — nada é filtrado
   // depois de carregado.
@@ -787,6 +791,8 @@ export async function getBills(
     switch (filter) {
       case "pendentes":
         return { ...base, status: emAberto };
+      case "canceladas":
+        return { ...base, status: "CANCELADO" as const };
       case "liquidadas":
         return { ...base, status: "LIQUIDADO" as const };
       case "vencidas":
@@ -798,7 +804,7 @@ export async function getBills(
       case "proximos30":
         return { ...base, status: emAberto, dueDate: { gte: today, lte: in30 } };
       default:
-        return base;
+        return semCancelados;
     }
   })();
 

@@ -12,6 +12,7 @@ const FILTERS: BillFilter[] = [
   "hoje",
   "proximos7",
   "proximos30",
+  "canceladas",
 ];
 
 /**

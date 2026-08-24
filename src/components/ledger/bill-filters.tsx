@@ -11,6 +11,7 @@ const OPTIONS: { key: BillFilter; label: string }[] = [
   { key: "proximos7", label: "Próximos 7 dias" },
   { key: "proximos30", label: "Próximos 30 dias" },
   { key: "liquidadas", label: "Liquidadas" },
+  { key: "canceladas", label: "Canceladas" },
   { key: "todas", label: "Todas" },
 ];
 

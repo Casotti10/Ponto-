@@ -6,8 +6,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { BillFilters } from "@/components/ledger/bill-filters";
 import { BillSettleButton } from "@/components/ledger/bill-settle-button";
+import { TransactionRowActions } from "@/components/ledger/transaction-row-actions";
 import { LedgerModuleNav } from "@/components/ledger/ledger-view-tabs";
-import { centsToBRL, formatLedgerDate, isOverdue } from "@/lib/ledger-calc";
+import { centsToBRL, formatLedgerDate, isOverdue, ledgerDayToISO } from "@/lib/ledger-calc";
 import { ledgerColors } from "@/lib/chart-colors";
 import { cn } from "@/lib/utils";
 import type { BillsView } from "@/lib/ledger-service";
@@ -33,6 +34,14 @@ export function BillsScreen({
   const rotuloTotal = isPayable ? "Total a pagar" : "Total a receber";
   const { indicators } = view;
 
+  const accountOptions = view.accounts
+    .filter((a) => !a.archived)
+    .map((a) => ({ id: a.id, name: a.name }));
+  const categoryOptions = view.categories.map((c) => ({
+    id: c.id,
+    name: c.name,
+    type: c.type,
+  }));
   const vazio = view.transactions.length === 0;
 
   return (
@@ -116,6 +125,7 @@ export function BillsScreen({
         <div className="divide-y rounded-lg border">
           {view.transactions.map((tx) => {
             const vencida = isOverdue(tx, todayLedger);
+            const cancelada = tx.status === "CANCELADO";
             const liquidada = tx.status === "LIQUIDADO";
             const vencimento = tx.dueDate ?? tx.date;
 
@@ -124,7 +134,7 @@ export function BillsScreen({
                 key={tx.id}
                 className={cn(
                   "flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between",
-                  liquidada && "opacity-60"
+                  (liquidada || cancelada) && "opacity-60"
                 )}
               >
                 <div className="min-w-0 flex-1">
@@ -142,6 +152,11 @@ export function BillsScreen({
                     {vencida && (
                       <Badge variant="outline" className="border-red-600/40 px-1 py-0 text-[10px] text-red-600 dark:text-red-500">
                         Vencida
+                      </Badge>
+                    )}
+                    {cancelada && (
+                      <Badge variant="outline" className="px-1 py-0 text-[10px] line-through">
+                        Cancelada
                       </Badge>
                     )}
                     {liquidada && (
@@ -164,7 +179,26 @@ export function BillsScreen({
                   >
                     {centsToBRL(tx.amountCents)}
                   </span>
-                  <BillSettleButton id={tx.id} type={view.type} settled={liquidada} />
+                  {!cancelada && (
+                    <BillSettleButton id={tx.id} type={view.type} settled={liquidada} />
+                  )}
+                  <TransactionRowActions
+                    accounts={accountOptions}
+                    categories={categoryOptions}
+                    isRecurring={!!tx.recurringId}
+                    transaction={{
+                      id: tx.id,
+                      date: ledgerDayToISO(tx.date),
+                      description: tx.description,
+                      amount: (tx.amountCents / 100).toFixed(2).replace(".", ","),
+                      type: tx.type,
+                      accountId: tx.accountId,
+                      categoryId: tx.categoryId,
+                      notes: null,
+                      status: tx.status,
+                      dueDate: tx.dueDate ? ledgerDayToISO(tx.dueDate) : null,
+                    }}
+                  />
                 </div>
               </div>
             );

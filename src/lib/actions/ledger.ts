@@ -822,3 +822,72 @@ export async function archiveFinancialGoal(id: string): Promise<FormResult> {
   revalidateBudgets();
   return { success: true };
 }
+
+/* ------------------------- Cancelamento de lançamento --------------------- */
+
+/**
+ * Cancela um lançamento sem apagá-lo.
+ *
+ * É a operação PREFERIDA sobre exclusão em dado financeiro: o registro
+ * continua existindo e auditável, mas para de impactar qualquer saldo — o
+ * cálculo já trata CANCELADO como inexistente para receita, despesa e caixa.
+ *
+ * A data de liquidação sai junto. Um lançamento cancelado que guardasse "pago
+ * em 08/09" seria uma contradição em espera, e é a mesma regra que a gravação e
+ * o desfazer-baixa já aplicam.
+ */
+export async function cancelTransaction(id: string): Promise<FormResult> {
+  const user = await requireUser();
+
+  const existing = await prisma.transaction.findFirst({ where: { id, userId: user.id } });
+  if (!existing) return { success: false, error: "Lançamento não encontrado" };
+  if (existing.status === "CANCELADO") return { success: false, error: "Este lançamento já está cancelado" };
+
+  await prisma.transaction.update({
+    where: { id },
+    data: { status: "CANCELADO", settledDate: null },
+  });
+
+  await logAudit({
+    userId: user.id,
+    entity: "TRANSACTION",
+    entityId: id,
+    action: "UPDATE",
+    before: { status: existing.status, settledDate: existing.settledDate },
+    after: { status: "CANCELADO", settledDate: null },
+    reason: "Cancelamento de lançamento",
+  });
+
+  revalidateLedger();
+  return { success: true };
+}
+
+/**
+ * Reativa um lançamento cancelado.
+ *
+ * Volta como PENDENTE, e não como liquidado: o sistema não tem como saber se o
+ * dinheiro chegou a se mover, e assumir que sim mexeria no saldo por conta
+ * própria. Quem reativa dá a baixa depois, se for o caso.
+ */
+export async function uncancelTransaction(id: string): Promise<FormResult> {
+  const user = await requireUser();
+
+  const existing = await prisma.transaction.findFirst({ where: { id, userId: user.id } });
+  if (!existing) return { success: false, error: "Lançamento não encontrado" };
+  if (existing.status !== "CANCELADO") return { success: false, error: "Este lançamento não está cancelado" };
+
+  await prisma.transaction.update({ where: { id }, data: { status: "PENDENTE" } });
+
+  await logAudit({
+    userId: user.id,
+    entity: "TRANSACTION",
+    entityId: id,
+    action: "UPDATE",
+    before: { status: "CANCELADO" },
+    after: { status: "PENDENTE" },
+    reason: "Reativação de lançamento cancelado",
+  });
+
+  revalidateLedger();
+  return { success: true };
+}
