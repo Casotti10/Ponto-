@@ -7,6 +7,8 @@ import {
   ImportValidationError,
   previewImport,
   MAX_ENTRIES_PER_IMPORT,
+  type ImportOverrides,
+  type SignMode,
 } from "@/lib/import-service";
 import { decodeStatementBytes, parseStatement, StatementParseError } from "@/lib/statement-parser";
 import {
@@ -42,6 +44,10 @@ import {
  *                             classificação automática sugerir
  *   password                  senha do PDF, quando o banco protege o arquivo.
  *                             Usada só para abrir o documento e nunca gravada.
+ *   signMode                  auto (padrão) | expense | income | invert — como
+ *                             interpretar o sinal dos valores do arquivo
+ *   overrides                 JSON { [externalId]: { type?, categoryId? } } com
+ *                             as correções feitas na tela de conferência
  *
  * Exemplo:
  *   curl -X POST https://<app>/api/financeiro/import \
@@ -58,6 +64,55 @@ function boolField(value: FormDataEntryValue | null, fallback: boolean): boolean
   if (value === null) return fallback;
   const normalized = String(value).trim().toLowerCase();
   return normalized === "true" || normalized === "1" || normalized === "on";
+}
+
+const SIGN_MODES: SignMode[] = ["auto", "expense", "income", "invert"];
+
+function signModeField(value: FormDataEntryValue | null): SignMode {
+  const normalized = String(value ?? "auto").trim().toLowerCase() as SignMode;
+  return SIGN_MODES.includes(normalized) ? normalized : "auto";
+}
+
+/**
+ * Correções por linha, em JSON.
+ *
+ * Filtra campo por campo em vez de confiar no formato recebido: o corpo vem do
+ * navegador, e só `type` e `categoryId` podem passar. Valor, data e descrição
+ * continuam saindo exclusivamente do arquivo, então nem um corpo forjado
+ * consegue gravar um lançamento que não está no extrato.
+ */
+function overridesField(value: FormDataEntryValue | null): ImportOverrides {
+  if (!value) return {};
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(String(value));
+  } catch {
+    return {};
+  }
+
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+
+  const result: ImportOverrides = {};
+  for (const [key, entry] of Object.entries(raw as Record<string, unknown>).slice(
+    0,
+    MAX_ENTRIES_PER_IMPORT
+  )) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const candidate = entry as { type?: unknown; categoryId?: unknown };
+    const override: { type?: "ENTRADA" | "SAIDA"; categoryId?: string | null } = {};
+
+    if (candidate.type === "ENTRADA" || candidate.type === "SAIDA") {
+      override.type = candidate.type;
+    }
+    if (candidate.categoryId === null || typeof candidate.categoryId === "string") {
+      override.categoryId = candidate.categoryId || null;
+    }
+
+    if (Object.keys(override).length > 0) result[key] = override;
+  }
+
+  return result;
 }
 
 export async function POST(request: Request) {
@@ -103,6 +158,9 @@ export async function POST(request: Request) {
   // Só existe durante esta requisição: nunca é persistida nem registrada em log.
   const password = String(form.get("password") ?? "").trim();
 
+  const signMode = signModeField(form.get("signMode"));
+  const overrides = overridesField(form.get("overrides"));
+
   const mode = String(form.get("mode") ?? "preview").toLowerCase();
   if (mode !== "preview" && mode !== "commit") {
     return NextResponse.json({ error: "mode deve ser preview ou commit." }, { status: 400 });
@@ -118,7 +176,7 @@ export async function POST(request: Request) {
       : parseStatement(decodeStatementBytes(bytes));
 
     if (mode === "preview") {
-      const preview = await previewImport(user.id, accountId, statement);
+      const preview = await previewImport(user.id, accountId, statement, signMode, overrides);
       return NextResponse.json(preview);
     }
 
@@ -128,6 +186,8 @@ export async function POST(request: Request) {
       statement,
       includePossibleDuplicates: boolField(form.get("includePossibleDuplicates"), false),
       createMissingCategories: boolField(form.get("createMissingCategories"), true),
+      signMode,
+      overrides,
     });
 
     if (result.imported > 0) {

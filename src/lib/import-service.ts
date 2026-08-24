@@ -23,6 +23,43 @@ export const MAX_ENTRIES_PER_IMPORT = 5000;
 
 export type CandidateStatus = "NOVO" | "JA_IMPORTADO" | "POSSIVEL_DUPLICADO";
 
+/**
+ * Como interpretar o sinal dos valores do arquivo.
+ *
+ * Nem todo documento diz se um valor é entrada ou saída. Fatura de cartão lista
+ * compras como números positivos; CSV de banco às vezes traz tudo positivo e
+ * deixa o sinal implícito na coluna. `auto` respeita o que o arquivo disse.
+ */
+export type SignMode = "auto" | "expense" | "income" | "invert";
+
+/**
+ * Correção por lançamento feita na tela de conferência.
+ *
+ * Só alcança tipo e categoria — nunca valor, data ou descrição, que continuam
+ * vindo exclusivamente do arquivo. É o que permite ajustar a classificação sem
+ * abrir uma porta para o navegador inventar lançamento.
+ */
+export interface CandidateOverride {
+  type?: TransactionType;
+  /** `null` remove a categoria; ausente mantém a sugerida. */
+  categoryId?: string | null;
+}
+
+export type ImportOverrides = Record<string, CandidateOverride>;
+
+function applySign(type: TransactionType, mode: SignMode): TransactionType {
+  switch (mode) {
+    case "expense":
+      return "SAIDA";
+    case "income":
+      return "ENTRADA";
+    case "invert":
+      return type === "SAIDA" ? "ENTRADA" : "SAIDA";
+    default:
+      return type;
+  }
+}
+
 export interface ImportCandidate {
   externalId: string;
   date: string;
@@ -53,6 +90,8 @@ export interface ImportPreview {
   periodStart: string | null;
   periodEnd: string | null;
   candidates: ImportCandidate[];
+  /** Categorias do usuário, para o seletor de cada linha na conferência. */
+  availableCategories: { id: string; name: string; type: TransactionType }[];
   skipped: SkippedRow[];
   summary: {
     total: number;
@@ -334,7 +373,9 @@ function monthBuckets(candidates: ImportCandidate[]): MonthBucket[] {
 async function buildCandidates(
   userId: string,
   accountId: string,
-  entries: ParsedEntry[]
+  entries: ParsedEntry[],
+  signMode: SignMode = "auto",
+  overrides: ImportOverrides = {}
 ): Promise<ImportCandidate[]> {
   // Contador por impressão digital: dois lançamentos idênticos no mesmo arquivo
   // precisam de chaves diferentes para que ambos entrem.
@@ -390,37 +431,60 @@ async function buildCandidates(
   const historyMap = buildHistoryMap(history);
 
   return withIds.map(({ entry, externalId }) => {
+    const override = overrides[externalId];
+
+    // O tipo efetivo é o que vai para o banco: o do arquivo, ajustado pelo modo
+    // de sinal e, por último, pela correção manual daquela linha.
+    //
+    // Repare que `externalId` NÃO depende disto — ele já foi calculado a partir
+    // do tipo cru do arquivo. É de propósito: reimportar o mesmo extrato com
+    // outra interpretação de sinal continua sendo reconhecido como duplicata em
+    // vez de virar um segundo lançamento.
+    const effectiveType = override?.type ?? applySign(entry.type, signMode);
+
     let status: CandidateStatus = "NOVO";
     if (alreadyImported.has(externalId)) {
       status = "JA_IMPORTADO";
-    } else if (manualKeys.has(`${entry.date}|${entry.type}|${entry.amountCents}`)) {
+    } else if (manualKeys.has(`${entry.date}|${effectiveType}|${entry.amountCents}`)) {
       status = "POSSIVEL_DUPLICADO";
     }
 
     // 1ª tentativa: o que o próprio usuário já escolheu para este lugar.
-    const signature = `${entry.type}:${merchantSignature(entry.description)}`;
+    const signature = `${effectiveType}:${merchantSignature(entry.description)}`;
     const learnedId = historyMap.get(signature) ?? null;
     const learned = learnedId ? categories.find((c) => c.id === learnedId) : null;
 
     // 2ª tentativa: dicionário de palavras-chave.
-    const suggestedName = learned ? null : suggestCategoryName(entry.description, entry.type);
+    const suggestedName = learned ? null : suggestCategoryName(entry.description, effectiveType);
     const existingSuggested = suggestedName
-      ? (categoryByName.get(`${entry.type}:${normalizeText(suggestedName)}`) ?? null)
+      ? (categoryByName.get(`${effectiveType}:${normalizeText(suggestedName)}`) ?? null)
       : null;
 
-    const resolved = learned ?? existingSuggested;
+    let resolved = learned ?? existingSuggested;
+    let suggestedForCreation = resolved ? null : suggestedName;
+
+    // A escolha manual vence as duas tentativas — mas só vale se a categoria
+    // for do usuário E do mesmo tipo do lançamento, senão o razão passaria a
+    // ter uma despesa classificada como "Salário".
+    if (override && "categoryId" in override) {
+      const chosen = override.categoryId
+        ? (categories.find((c) => c.id === override.categoryId && c.type === effectiveType) ?? null)
+        : null;
+      resolved = chosen;
+      suggestedForCreation = null;
+    }
 
     return {
       externalId,
       date: entry.date,
       description: entry.description,
       amountCents: entry.amountCents,
-      type: entry.type,
+      type: effectiveType,
       status,
       categoryId: resolved?.id ?? null,
       categoryName: resolved?.name ?? null,
       // Só é "a criar" se a regra sugeriu e o usuário ainda não tem a categoria.
-      suggestedCategoryName: resolved ? null : suggestedName,
+      suggestedCategoryName: suggestedForCreation,
     };
   });
 }
@@ -455,13 +519,28 @@ async function assertOwnedAccount(userId: string, accountId: string) {
 export async function previewImport(
   userId: string,
   accountId: string,
-  statement: ParsedStatement
+  statement: ParsedStatement,
+  signMode: SignMode = "auto",
+  overrides: ImportOverrides = {}
 ): Promise<ImportPreview> {
   assertImportable(statement);
   await assertOwnedAccount(userId, accountId);
 
-  const candidates = await buildCandidates(userId, accountId, statement.entries);
+  const candidates = await buildCandidates(
+    userId,
+    accountId,
+    statement.entries,
+    signMode,
+    overrides
+  );
   const novos = candidates.filter((c) => c.status === "NOVO");
+
+  // A tela precisa da lista para montar o seletor de categoria de cada linha.
+  const availableCategories = await prisma.category.findMany({
+    where: { userId, archived: false },
+    select: { id: true, name: true, type: true },
+    orderBy: { name: "asc" },
+  });
 
   const categoriesToCreate = new Map<string, { name: string; type: TransactionType }>();
   for (const candidate of candidates) {
@@ -479,6 +558,7 @@ export async function previewImport(
     periodStart: statement.periodStart,
     periodEnd: statement.periodEnd,
     candidates,
+    availableCategories,
     skipped: statement.skipped,
     summary: {
       total: candidates.length,
@@ -504,13 +584,29 @@ export async function commitImport(params: {
   statement: ParsedStatement;
   includePossibleDuplicates: boolean;
   createMissingCategories: boolean;
+  signMode?: SignMode;
+  overrides?: ImportOverrides;
 }): Promise<ImportResult> {
-  const { userId, accountId, statement, includePossibleDuplicates, createMissingCategories } = params;
+  const {
+    userId,
+    accountId,
+    statement,
+    includePossibleDuplicates,
+    createMissingCategories,
+    signMode = "auto",
+    overrides = {},
+  } = params;
 
   assertImportable(statement);
   await assertOwnedAccount(userId, accountId);
 
-  let candidates = await buildCandidates(userId, accountId, statement.entries);
+  let candidates = await buildCandidates(
+    userId,
+    accountId,
+    statement.entries,
+    signMode,
+    overrides
+  );
   let categoriesCreated = 0;
 
   if (createMissingCategories) {
@@ -542,7 +638,13 @@ export async function commitImport(params: {
 
       // As categorias novas só existem agora, então a resolução tem que rodar
       // de novo para que os lançamentos deste lote já nasçam categorizados.
-      candidates = await buildCandidates(userId, accountId, statement.entries);
+      candidates = await buildCandidates(
+        userId,
+        accountId,
+        statement.entries,
+        signMode,
+        overrides
+      );
     }
   }
 
