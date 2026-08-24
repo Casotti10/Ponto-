@@ -3,6 +3,10 @@ import {
   breakdownByCategory,
   buildDailyFlow,
   computeAccountBalancesFromTotals,
+  isCancelled,
+  isOverdue,
+  isSettled,
+  isTransfer,
   ledgerMonthOf,
   ledgerMonthRange,
   ledgerYearRange,
@@ -16,6 +20,7 @@ import {
   type DailyFlowPoint,
   type PeriodTotals,
   type TransactionLike,
+  type TransactionStatusLike,
 } from "@/lib/ledger-calc";
 
 /**
@@ -54,6 +59,11 @@ const SEED_CATEGORIES: { name: string; type: "ENTRADA" | "SAIDA"; color: string 
 export interface LedgerTransaction extends TransactionLike {
   notes: string | null;
   recurringId: string | null;
+  settledDate: Date | null;
+  paymentMethod: string | null;
+  installmentGroupId: string | null;
+  installmentNumber: number | null;
+  installmentTotal: number | null;
   accountName: string;
   accountColor: string;
   categoryName: string | null;
@@ -83,6 +93,14 @@ type TransactionRow = {
   categoryId: string | null;
   notes: string | null;
   recurringId: string | null;
+  status: TransactionStatusLike;
+  dueDate: Date | null;
+  settledDate: Date | null;
+  paymentMethod: string | null;
+  transferGroupId: string | null;
+  installmentGroupId: string | null;
+  installmentNumber: number | null;
+  installmentTotal: number | null;
   account: { name: string; color: string };
   category: { name: string; color: string } | null;
 };
@@ -98,6 +116,14 @@ function toLedgerTransaction(tx: TransactionRow): LedgerTransaction {
     categoryId: tx.categoryId,
     notes: tx.notes,
     recurringId: tx.recurringId,
+    status: tx.status,
+    dueDate: tx.dueDate,
+    settledDate: tx.settledDate,
+    paymentMethod: tx.paymentMethod,
+    transferGroupId: tx.transferGroupId,
+    installmentGroupId: tx.installmentGroupId,
+    installmentNumber: tx.installmentNumber,
+    installmentTotal: tx.installmentTotal,
     accountName: tx.account.name,
     accountColor: tx.account.color,
     categoryName: tx.category?.name ?? null,
@@ -184,7 +210,14 @@ export async function getBalanceBefore(
     prisma.account.aggregate({ where: accountWhere, _sum: { openingBalanceCents: true } }),
     prisma.transaction.groupBy({
       by: ["type"],
-      where: { userId, date: { lt: date }, ...(accountId ? { accountId } : {}) },
+      where: {
+        userId,
+        date: { lt: date },
+        // Caixa inicial é dinheiro que EXISTE. Uma conta pendente do mês
+        // passado não o reduziu, e uma cancelada nunca chegou a existir.
+        status: "LIQUIDADO",
+        ...(accountId ? { accountId } : {}),
+      },
       _sum: { amountCents: true },
     }),
   ]);
@@ -209,7 +242,13 @@ export async function getMonthNetCents(
 
   const rows = await prisma.transaction.groupBy({
     by: ["type"],
-    where: { userId, date: { gte: start, lte: end }, ...(accountId ? { accountId } : {}) },
+    // Série anual e comparativo entre meses falam de dinheiro que se moveu.
+    where: {
+      userId,
+      date: { gte: start, lte: end },
+      status: "LIQUIDADO",
+      ...(accountId ? { accountId } : {}),
+    },
     _sum: { amountCents: true },
   });
 
@@ -318,7 +357,9 @@ export async function getMonthlyLedger(
       // evita carregar todo o passado só para fechar um número.
       prisma.transaction.groupBy({
         by: ["accountId", "type"],
-        where: { userId, date: { lte: monthEnd } },
+        // Saldo da conta é dinheiro que existe: só o liquidado entra. A
+        // transferência entra sim — ela move dinheiro de verdade entre contas.
+        where: { userId, date: { lte: monthEnd }, status: "LIQUIDADO" },
         _sum: { amountCents: true },
         _count: { _all: true },
       }),
@@ -333,7 +374,7 @@ export async function getMonthlyLedger(
     color: c.color,
   }));
 
-  const totals = summarizeTransactions(transactions);
+  const totals = summarizeTransactions(transactions, referenceDate);
 
   const allAccounts = computeAccountBalancesFromTotals(
     accountRows.map((a) => ({
@@ -469,7 +510,9 @@ export const HISTORY_PAGE_SIZE = 50;
  */
 export async function getLedgerHistory(
   userId: string,
-  filters: LedgerHistoryFilters
+  filters: LedgerHistoryFilters,
+  /** "Hoje" para decidir o que está vencido. Injetado para ser testável. */
+  referenceDate: Date = new Date()
 ): Promise<LedgerHistory> {
   await ensureLedgerBootstrap(userId);
 
@@ -497,7 +540,18 @@ export async function getLedgerHistory(
   const [scopeRows, totalCount, accountRows, categoryRows, balanceTotals] = await Promise.all([
     prisma.transaction.findMany({
       where: baseWhere,
-      select: { date: true, amountCents: true, type: true },
+      // `status`, `dueDate` e `transferGroupId` entram aqui porque os totais da
+      // visão geral precisam separar realizado de previsto e excluir cancelado
+      // e transferência — sem eles o histórico responderia com outra régua que
+      // a visão mensal.
+      select: {
+        date: true,
+        amountCents: true,
+        type: true,
+        status: true,
+        dueDate: true,
+        transferGroupId: true,
+      },
       orderBy: { date: "asc" },
     }),
     prisma.transaction.count({ where: fullWhere }),
@@ -508,7 +562,9 @@ export async function getLedgerHistory(
     }),
     prisma.transaction.groupBy({
       by: ["accountId", "type"],
-      where: { userId },
+      // Saldo da conta é dinheiro que existe: só o liquidado entra. A
+      // transferência entra sim — ela move dinheiro de verdade entre contas.
+      where: { userId, status: "LIQUIDADO" },
       _sum: { amountCents: true },
       _count: { _all: true },
     }),
@@ -535,9 +591,29 @@ export async function getLedgerHistory(
 
   let incomeCents = 0;
   let expenseCents = 0;
+  let pendingIncomeCents = 0;
+  let pendingExpenseCents = 0;
+  let overdueIncomeCents = 0;
+  let overdueExpenseCents = 0;
+  let cancelledCount = 0;
+  let transferCount = 0;
+  let countedRows = 0;
   const monthMap = new Map<string, HistoryMonthRow>();
 
   for (const row of inScope) {
+    // Mesma régua da visão mensal: cancelado foi desfeito e transferência não é
+    // receita nem despesa. Os dois são contados à parte para que a tela possa
+    // dizer que existem.
+    if (isCancelled(row)) {
+      cancelledCount++;
+      continue;
+    }
+    if (isTransfer(row)) {
+      transferCount++;
+      continue;
+    }
+    countedRows++;
+
     const { year: rowYear, month: rowMonth } = ledgerMonthOf(row.date);
     const key = `${rowYear}-${rowMonth}`;
     let bucket = monthMap.get(key);
@@ -554,12 +630,25 @@ export async function getLedgerHistory(
       monthMap.set(key, bucket);
     }
 
+    const settled = isSettled(row);
+    const overdue = isOverdue(row, referenceDate);
+
     if (row.type === "ENTRADA") {
-      incomeCents += row.amountCents;
-      bucket.incomeCents += row.amountCents;
+      if (settled) {
+        incomeCents += row.amountCents;
+        bucket.incomeCents += row.amountCents;
+      } else {
+        pendingIncomeCents += row.amountCents;
+        if (overdue) overdueIncomeCents += row.amountCents;
+      }
     } else {
-      expenseCents += row.amountCents;
-      bucket.expenseCents += row.amountCents;
+      if (settled) {
+        expenseCents += row.amountCents;
+        bucket.expenseCents += row.amountCents;
+      } else {
+        pendingExpenseCents += row.amountCents;
+        if (overdue) overdueExpenseCents += row.amountCents;
+      }
     }
     bucket.transactionCount += 1;
   }
@@ -576,11 +665,18 @@ export async function getLedgerHistory(
       incomeCents,
       expenseCents,
       balanceCents,
-      transactionCount: inScope.length,
+      transactionCount: countedRows,
       savingsRate: incomeCents > 0 ? Math.round((balanceCents / incomeCents) * 100) : 0,
       // O maior gasto do histórico exigiria a linha completa; a visão geral já
       // destaca isso pelo resumo mensal, então aqui fica de fora de propósito.
       biggestExpense: null,
+      pendingIncomeCents,
+      pendingExpenseCents,
+      overdueIncomeCents,
+      overdueExpenseCents,
+      projectedBalanceCents: balanceCents + pendingIncomeCents - pendingExpenseCents,
+      cancelledCount,
+      transferCount,
     },
     page,
     pageSize,

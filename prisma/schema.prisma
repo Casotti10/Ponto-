@@ -111,6 +111,34 @@ enum RecurrenceFrequency {
   ANUAL
 }
 
+/// Situação do lançamento no tempo — o que separa "previsto" de "realizado".
+///
+/// Não existe PAGO e RECEBIDO separados de propósito: são o MESMO estado
+/// aplicado a tipos diferentes, e um enum com os dois permitiria a combinação
+/// inválida "receita paga". O tipo do lançamento já diz de que lado ele está;
+/// a interface é que traduz LIQUIDADO para "Pago" numa saída e "Recebido" numa
+/// entrada.
+///
+/// VENCIDO também não está aqui, e isso é deliberado: vencido é
+/// `PENDENTE AND dueDate < hoje`. Guardar como estado exigiria um job virando
+/// registro à meia-noite, e o dado ficaria errado entre a virada e a execução.
+enum TransactionStatus {
+  PENDENTE // previsto, ainda não aconteceu
+  LIQUIDADO // pago (saída) ou recebido (entrada)
+  AGENDADO // programado para acontecer numa data futura
+  CANCELADO // desfeito; não impacta saldo nenhum
+}
+
+enum PaymentMethod {
+  DINHEIRO
+  PIX
+  DEBITO
+  CREDITO
+  BOLETO
+  TRANSFERENCIA
+  OUTRO
+}
+
 // ---------------------------------------------------------------------------
 // Módulo de tarefas: quadro Kanban.
 // Independente do ponto e do financeiro — nenhum modelo abaixo lê horas ou dinheiro.
@@ -154,71 +182,71 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  timeEntries         TimeEntry[]
-  absences            Absence[]
-  balanceAdjustments  BalanceAdjustment[]
-  workSchedule        WorkSchedule?
-  auditLogs           AuditLog[]
-  goals               Goal[]
-  monthlyClosures     MonthlyClosure[]
-  notifications       Notification[]
-  accounts            Account[]
-  categories          Category[]
-  transactions        Transaction[]
+  timeEntries           TimeEntry[]
+  absences              Absence[]
+  balanceAdjustments    BalanceAdjustment[]
+  workSchedule          WorkSchedule?
+  auditLogs             AuditLog[]
+  goals                 Goal[]
+  monthlyClosures       MonthlyClosure[]
+  notifications         Notification[]
+  accounts              Account[]
+  categories            Category[]
+  transactions          Transaction[]
   recurringTransactions RecurringTransaction[]
-  boards              Board[]
-  assignedCards       TaskCard[]
-  taskActivities      TaskActivity[]
+  boards                Board[]
+  assignedCards         TaskCard[]
+  taskActivities        TaskActivity[]
 
   @@index([email])
 }
 
 model WorkSchedule {
-  id                   String   @id @default(cuid())
-  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId               String   @unique
-  dailyHours           Float    @default(8) // jornada diária em horas
-  weeklyHours          Float    @default(40) // carga semanal
-  lunchBreakMinutes    Int      @default(60) // intervalo obrigatório em minutos
-  toleranceMinutes     Int      @default(10) // tolerância de atraso
-  workDays             Int[]    @default([1, 2, 3, 4, 5]) // 0=domingo ... 6=sábado
-  entryTime            String   @default("08:00") // horário previsto de entrada HH:mm
-  lunchOutTime         String   @default("12:00")
-  lunchReturnTime      String   @default("13:00")
-  exitTime             String   @default("17:00")
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  id                String   @id @default(cuid())
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId            String   @unique
+  dailyHours        Float    @default(8) // jornada diária em horas
+  weeklyHours       Float    @default(40) // carga semanal
+  lunchBreakMinutes Int      @default(60) // intervalo obrigatório em minutos
+  toleranceMinutes  Int      @default(10) // tolerância de atraso
+  workDays          Int[]    @default([1, 2, 3, 4, 5]) // 0=domingo ... 6=sábado
+  entryTime         String   @default("08:00") // horário previsto de entrada HH:mm
+  lunchOutTime      String   @default("12:00")
+  lunchReturnTime   String   @default("13:00")
+  exitTime          String   @default("17:00")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 }
 
 model TimeEntry {
-  id          String      @id @default(cuid())
-  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId      String
-  date        DateTime    // dia do registro à meia-noite local (sem @db.Date: ver nota de timezone)
-  type        EntryType
-  time        DateTime // data+hora completa do evento
-  notes       String?
-  source      EntrySource @default(MANUAL)
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
+  id        String      @id @default(cuid())
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  date      DateTime // dia do registro à meia-noite local (sem @db.Date: ver nota de timezone)
+  type      EntryType
+  time      DateTime // data+hora completa do evento
+  notes     String?
+  source    EntrySource @default(MANUAL)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
 
   @@index([userId, date])
   @@index([userId, type, date])
 }
 
 model Absence {
-  id          String        @id @default(cuid())
-  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId      String
-  date        DateTime
-  endDate     DateTime?     // para intervalos (férias/licença)
-  type        AbsenceType
-  impact      AbsenceImpact
-  hours       Float? // horas específicas abatidas/creditadas quando aplicável
-  reason      String?
-  approved    Boolean       @default(true)
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  id        String        @id @default(cuid())
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  date      DateTime
+  endDate   DateTime? // para intervalos (férias/licença)
+  type      AbsenceType
+  impact    AbsenceImpact
+  hours     Float? // horas específicas abatidas/creditadas quando aplicável
+  reason    String?
+  approved  Boolean       @default(true)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
 
   @@index([userId, date])
   @@index([userId, type])
@@ -238,30 +266,30 @@ model BalanceAdjustment {
 }
 
 model MonthlyClosure {
-  id            String   @id @default(cuid())
-  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId        String
-  year          Int
-  month         Int // 1-12
-  balanceMinutes Int // saldo acumulado ao final do mês (em minutos)
-  workedMinutes Int
+  id              String   @id @default(cuid())
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId          String
+  year            Int
+  month           Int // 1-12
+  balanceMinutes  Int // saldo acumulado ao final do mês (em minutos)
+  workedMinutes   Int
   expectedMinutes Int
-  extraMinutes  Int
+  extraMinutes    Int
   negativeMinutes Int
-  closedAt      DateTime @default(now())
+  closedAt        DateTime @default(now())
 
   @@unique([userId, year, month])
 }
 
 model Goal {
-  id         String   @id @default(cuid())
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId     String
-  title      String
+  id          String   @id @default(cuid())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      String
+  title       String
   targetHours Float
-  year       Int
-  month      Int
-  createdAt  DateTime @default(now())
+  year        Int
+  month       Int
+  createdAt   DateTime @default(now())
 
   @@index([userId, year, month])
 }
@@ -292,8 +320,14 @@ model Account {
   openingBalanceCents Int         @default(0)
   color               String      @default("#2a78d6")
   archived            Boolean     @default(false)
-  createdAt           DateTime    @default(now())
-  updatedAt           DateTime    @updatedAt
+
+  /// Só fazem sentido quando `type = CARTAO`. Nulos nas demais contas em vez de
+  /// zero, para que "sem limite cadastrado" não se confunda com "limite zero".
+  creditLimitCents Int?
+  closingDay       Int?
+  dueDay           Int?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   transactions          Transaction[]
   recurringTransactions RecurringTransaction[]
@@ -305,15 +339,22 @@ model Account {
 /// Categoria de um lançamento. Pertence a UM tipo (entrada ou saída) para que
 /// o formulário só ofereça categorias compatíveis com o que está sendo lançado.
 model Category {
-  id        String          @id @default(cuid())
-  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId    String
-  name      String
-  type      TransactionType
-  color     String          @default("#898781")
-  archived  Boolean         @default(false)
-  createdAt DateTime        @default(now())
-  updatedAt DateTime        @updatedAt
+  id       String          @id @default(cuid())
+  user     User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId   String
+  name     String
+  type     TransactionType
+  color    String          @default("#898781")
+  archived Boolean         @default(false)
+
+  /// Subcategoria: "Supermercado" dentro de "Alimentação". Auto-relação de um
+  /// nível só — categoria filha não tem filha, o que mantém toda agregação
+  /// possível em uma junção.
+  parent    Category?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  parentId  String?
+  children  Category[] @relation("CategoryTree")
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
 
   transactions          Transaction[]
   recurringTransactions RecurringTransaction[]
@@ -354,6 +395,33 @@ model Transaction {
   externalId String?
   importedAt DateTime?
 
+  /// Situação. O padrão é LIQUIDADO para preservar o comportamento anterior:
+  /// antes desta coluna todo lançamento contava no saldo, e a migration não
+  /// pode mudar o saldo de quem já usa o módulo.
+  status TransactionStatus @default(LIQUIDADO)
+
+  /// As três datas que a conta de energia exige separar: competência (agosto),
+  /// vencimento (10/09) e pagamento (08/09). `date` é a COMPETÊNCIA — o mês a
+  /// que o lançamento pertence — e continua sendo o campo que recorta a visão
+  /// mensal. As outras duas são opcionais; quando nulas, valem `date`.
+  dueDate     DateTime?
+  settledDate DateTime?
+
+  paymentMethod PaymentMethod?
+
+  /// Transferência entre contas é um PAR de lançamentos (saída na origem,
+  /// entrada no destino) unidos por este id. Modelar como um terceiro valor de
+  /// TransactionType quebraria todo switch exaustivo existente e ainda deixaria
+  /// sem resposta "de qual conta para qual". As duas pernas contam no saldo das
+  /// suas contas e nenhuma conta como receita ou despesa.
+  transferGroupId String?
+
+  /// Parcelamento: cada parcela é um lançamento de verdade, com vencimento e
+  /// situação próprios, e todas compartilham este id.
+  installmentGroupId String?
+  installmentNumber  Int?
+  installmentTotal   Int?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -369,6 +437,10 @@ model Transaction {
   @@index([accountId, date])
   @@index([categoryId])
   @@index([userId, importedAt])
+  /// Sustenta as telas de contas a pagar/receber e o cálculo de vencidos.
+  @@index([userId, status, dueDate])
+  @@index([transferGroupId])
+  @@index([installmentGroupId])
 }
 
 /// Modelo de lançamento que se repete (aluguel, salário, assinatura).
@@ -387,9 +459,9 @@ model RecurringTransaction {
   frequency   RecurrenceFrequency @default(MENSAL)
 
   /// MENSAL e ANUAL: dia do mês (1-31, ajustado para o último dia em meses curtos).
-  dayOfMonth Int @default(1)
+  dayOfMonth  Int @default(1)
   /// SEMANAL: 0=domingo ... 6=sábado.
-  weekday    Int @default(1)
+  weekday     Int @default(1)
   /// ANUAL: mês de referência (1-12).
   monthOfYear Int @default(1)
 
@@ -573,16 +645,16 @@ model TaskActivity {
 }
 
 model AuditLog {
-  id         String      @id @default(cuid())
-  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId     String
-  entity     AuditEntity
-  entityId   String
-  action     AuditAction
-  before     Json?
-  after      Json?
-  reason     String?
-  createdAt  DateTime    @default(now())
+  id        String      @id @default(cuid())
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  entity    AuditEntity
+  entityId  String
+  action    AuditAction
+  before    Json?
+  after     Json?
+  reason    String?
+  createdAt DateTime    @default(now())
 
   @@index([userId, createdAt])
   @@index([entity, entityId])

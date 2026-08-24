@@ -14,6 +14,8 @@
 
 export type TransactionTypeLike = "ENTRADA" | "SAIDA";
 
+export type TransactionStatusLike = "PENDENTE" | "LIQUIDADO" | "AGENDADO" | "CANCELADO";
+
 export interface TransactionLike {
   id: string;
   date: Date;
@@ -22,6 +24,14 @@ export interface TransactionLike {
   type: TransactionTypeLike;
   accountId: string;
   categoryId: string | null;
+  /**
+   * Opcionais para que os lançamentos lidos antes da coluna existir continuem
+   * satisfazendo este tipo. Ausente significa o comportamento histórico:
+   * liquidado, sem vencimento próprio e sem transferência.
+   */
+  status?: TransactionStatusLike;
+  dueDate?: Date | null;
+  transferGroupId?: string | null;
 }
 
 export interface AccountLike {
@@ -43,6 +53,65 @@ export interface CategoryLike {
 /** Converte o sinal do lançamento: entrada soma, saída subtrai. */
 export function signedCents(tx: { amountCents: number; type: TransactionTypeLike }) {
   return tx.type === "ENTRADA" ? tx.amountCents : -tx.amountCents;
+}
+
+/* --------------------------- integridade financeira ------------------------ */
+
+/**
+ * As quatro perguntas que decidem se um lançamento entra numa conta.
+ *
+ * Estão aqui, juntas e puras, porque cada uma delas errada produz um número
+ * plausível e falso — o pior tipo de bug num sistema financeiro. Um lançamento
+ * cancelado que continua somando, ou uma transferência contada como receita,
+ * não quebram a tela: só mentem.
+ */
+
+/** Liquidado = o dinheiro realmente entrou ou saiu. Só isto mexe no saldo. */
+export function isSettled(tx: Pick<TransactionLike, "status">): boolean {
+  // Ausente = histórico anterior à coluna, quando tudo era realizado.
+  return (tx.status ?? "LIQUIDADO") === "LIQUIDADO";
+}
+
+export function isCancelled(tx: Pick<TransactionLike, "status">): boolean {
+  return tx.status === "CANCELADO";
+}
+
+/**
+ * Perna de uma transferência entre contas próprias. Conta no saldo da conta
+ * dela, mas nunca como receita nem como despesa: transferir R$ 500 da corrente
+ * para a poupança não é ganhar nem gastar R$ 500.
+ */
+export function isTransfer(tx: Pick<TransactionLike, "transferGroupId">): boolean {
+  return !!tx.transferGroupId;
+}
+
+/**
+ * Vencido é DERIVADO, nunca armazenado. Guardar como estado exigiria um job
+ * virando registro à meia-noite, e entre a virada e a execução o banco estaria
+ * mentindo. Aqui a resposta é sempre a de agora.
+ */
+export function isOverdue(
+  tx: Pick<TransactionLike, "status" | "dueDate" | "date">,
+  today: Date
+): boolean {
+  if ((tx.status ?? "LIQUIDADO") !== "PENDENTE") return false;
+  const due = tx.dueDate ?? tx.date;
+  return due.getTime() < startOfLedgerDay(today).getTime();
+}
+
+/** Entra no resultado do período (receitas − despesas). */
+export function countsForResult(tx: TransactionLike): boolean {
+  return !isCancelled(tx) && !isTransfer(tx);
+}
+
+/** Entra no saldo real da conta. */
+export function countsForBalance(tx: TransactionLike): boolean {
+  return isSettled(tx) && !isCancelled(tx);
+}
+
+/** Meia-noite UTC do dia de uma data — mesma convenção de `ledgerDayFromISO`. */
+export function startOfLedgerDay(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 }
 
 /* ------------------------------ o dia contábil ----------------------------- */
@@ -115,27 +184,87 @@ export function ledgerDaysInMonth(year: number, month: number) {
 }
 
 export interface PeriodTotals {
+  /** REALIZADO: entradas que de fato foram recebidas. */
   incomeCents: number;
+  /** REALIZADO: saídas que de fato foram pagas. */
   expenseCents: number;
-  /** Entradas − saídas do período. Negativo significa que o mês fechou no vermelho. */
+  /** Entradas − saídas realizadas. Negativo significa que o mês fechou no vermelho. */
   balanceCents: number;
   transactionCount: number;
   /** Percentual das entradas que sobrou. 0 quando não houve entrada. */
   savingsRate: number;
   biggestExpense: TransactionLike | null;
+
+  /** PREVISTO: a receber (entradas pendentes ou agendadas). */
+  pendingIncomeCents: number;
+  /** PREVISTO: a pagar (saídas pendentes ou agendadas). */
+  pendingExpenseCents: number;
+  /** Do que está pendente, o que já passou do vencimento. */
+  overdueIncomeCents: number;
+  overdueExpenseCents: number;
+  /** Realizado + tudo que ainda está previsto para o período. */
+  projectedBalanceCents: number;
+
+  cancelledCount: number;
+  transferCount: number;
 }
 
-export function summarizeTransactions(transactions: TransactionLike[]): PeriodTotals {
+/**
+ * Totais do período, separando o que ACONTECEU do que está PREVISTO.
+ *
+ * Misturar os dois é o erro que faz o app dizer que há dinheiro em caixa que
+ * não existe: uma despesa lançada para o mês que vem não pode reduzir o saldo
+ * de hoje, e uma receita ainda não recebida não pode aumentá-lo.
+ *
+ * Cancelados e transferências ficam de fora dos dois lados — o primeiro porque
+ * foi desfeito, a segunda porque mover dinheiro entre contas próprias não é
+ * receita nem despesa. Ambos continuam contados, separadamente, para que a tela
+ * possa dizer que existem.
+ */
+export function summarizeTransactions(
+  transactions: TransactionLike[],
+  today: Date = new Date()
+): PeriodTotals {
   let incomeCents = 0;
   let expenseCents = 0;
+  let pendingIncomeCents = 0;
+  let pendingExpenseCents = 0;
+  let overdueIncomeCents = 0;
+  let overdueExpenseCents = 0;
+  let cancelledCount = 0;
+  let transferCount = 0;
+  let counted = 0;
   let biggestExpense: TransactionLike | null = null;
 
   for (const tx of transactions) {
+    if (isCancelled(tx)) {
+      cancelledCount++;
+      continue;
+    }
+    if (isTransfer(tx)) {
+      transferCount++;
+      continue;
+    }
+
+    counted++;
+    const settled = isSettled(tx);
+    const overdue = isOverdue(tx, today);
+
     if (tx.type === "ENTRADA") {
-      incomeCents += tx.amountCents;
+      if (settled) incomeCents += tx.amountCents;
+      else {
+        pendingIncomeCents += tx.amountCents;
+        if (overdue) overdueIncomeCents += tx.amountCents;
+      }
     } else {
-      expenseCents += tx.amountCents;
-      if (!biggestExpense || tx.amountCents > biggestExpense.amountCents) biggestExpense = tx;
+      if (settled) {
+        expenseCents += tx.amountCents;
+        // "Maior despesa" é sobre dinheiro que saiu, não sobre previsão.
+        if (!biggestExpense || tx.amountCents > biggestExpense.amountCents) biggestExpense = tx;
+      } else {
+        pendingExpenseCents += tx.amountCents;
+        if (overdue) overdueExpenseCents += tx.amountCents;
+      }
     }
   }
 
@@ -145,9 +274,16 @@ export function summarizeTransactions(transactions: TransactionLike[]): PeriodTo
     incomeCents,
     expenseCents,
     balanceCents,
-    transactionCount: transactions.length,
+    transactionCount: counted,
     savingsRate: incomeCents > 0 ? Math.round((balanceCents / incomeCents) * 100) : 0,
     biggestExpense,
+    pendingIncomeCents,
+    pendingExpenseCents,
+    overdueIncomeCents,
+    overdueExpenseCents,
+    projectedBalanceCents: balanceCents + pendingIncomeCents - pendingExpenseCents,
+    cancelledCount,
+    transferCount,
   };
 }
 
@@ -186,6 +322,11 @@ export function buildDailyFlow(
   }));
 
   for (const tx of transactions) {
+    // O fluxo de caixa é a linha do dinheiro que se moveu. Previsto, cancelado
+    // e transferência ficam de fora: o saldo acumulado que sai daqui precisa
+    // fechar com o saldo real da conta.
+    if (!countsForResult(tx) || !isSettled(tx)) continue;
+
     const index = ledgerDayOfMonth(tx.date) - 1;
     if (index < 0 || index >= points.length) continue;
     if (tx.type === "ENTRADA") points[index].incomeCents += tx.amountCents;
@@ -228,6 +369,9 @@ export function breakdownByCategory(
 
   for (const tx of transactions) {
     if (tx.type !== type) continue;
+    // "Onde meu dinheiro foi" é sobre gasto realizado. Cancelado foi desfeito e
+    // transferência não é gasto — nenhum dos dois pertence à rosca.
+    if (!countsForResult(tx) || !isSettled(tx)) continue;
     total += tx.amountCents;
 
     const key = tx.categoryId ?? "__none__";
@@ -275,6 +419,12 @@ export function computeAccountBalances(
   const byAccount = new Map<string, { total: number; count: number }>();
 
   for (const tx of allTransactions) {
+    // SALDO REAL: só o que foi liquidado. Uma despesa pendente não pode reduzir
+    // o dinheiro que existe hoje, e uma receita a receber não pode aumentá-lo.
+    // Transferência ENTRA aqui de propósito — ela move dinheiro de verdade
+    // entre contas, mesmo não sendo receita nem despesa.
+    if (!countsForBalance(tx)) continue;
+
     const entry = byAccount.get(tx.accountId) ?? { total: 0, count: 0 };
     entry.total += signedCents(tx);
     entry.count += 1;
@@ -377,10 +527,6 @@ export function occurrencesInMonth(recurrence: RecurrenceLike, year: number, mon
     if (end && date.getTime() > end.getTime()) return false;
     return true;
   });
-}
-
-function startOfLedgerDay(date: Date) {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 }
 
 /* ------------------------------- formatação ------------------------------ */
