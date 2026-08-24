@@ -197,6 +197,8 @@ model User {
   boards                Board[]
   assignedCards         TaskCard[]
   taskActivities        TaskActivity[]
+  budgets               Budget[]
+  financialGoals        FinancialGoal[]
 
   @@index([email])
 }
@@ -358,6 +360,7 @@ model Category {
 
   transactions          Transaction[]
   recurringTransactions RecurringTransaction[]
+  budgets               Budget[]
 
   @@unique([userId, name, type])
   @@index([userId, type])
@@ -658,4 +661,51 @@ model AuditLog {
 
   @@index([userId, createdAt])
   @@index([entity, entityId])
+}
+
+/// Teto de gasto de uma categoria num mês.
+///
+/// `categoryId` nulo é o orçamento TOTAL do mês — o teto de tudo somado. A
+/// unicidade desse caso não cabe num `@@unique` do Prisma: no Postgres dois
+/// NULL não colidem, então nada impediria dois orçamentos totais para o mesmo
+/// mês. A migration cria um índice único PARCIAL (`WHERE categoryId IS NULL`)
+/// que o banco de fato garante.
+model Budget {
+  id         String    @id @default(cuid())
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId     String
+  category   Category? @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  categoryId String?
+  year       Int
+  month      Int
+  limitCents Int
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@unique([userId, categoryId, year, month])
+  @@index([userId, year, month])
+}
+
+/// Meta financeira: juntar dinheiro para um objetivo.
+///
+/// Nome diferente do `Goal` que já existe no schema de propósito — aquele é
+/// meta de HORAS, do módulo de ponto, e reaproveitá-lo misturaria dois domínios
+/// que o projeto mantém separados.
+model FinancialGoal {
+  id           String    @id @default(cuid())
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId       String
+  name         String
+  targetCents  Int
+  /// Quanto já foi guardado. Editado à mão — vincular a uma conta faria a meta
+  /// mudar sozinha a cada gasto, que não é como alguém acompanha um objetivo.
+  currentCents Int       @default(0)
+  deadline     DateTime?
+  color        String    @default("#2a78d6")
+  notes        String?
+  archived     Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([userId, archived])
 }

@@ -320,3 +320,23 @@ export const transferSchema = z.object({
   date: z.string().min(1, "Informe a data"),
   description: z.string().max(180).optional().or(z.literal("")),
 });
+
+/** Teto de gasto de uma categoria (ou do mês inteiro) num período. */
+export const budgetSchema = z.object({
+  id: z.string().optional(),
+  /** Vazio = orçamento total do mês. */
+  categoryId: z.string().optional().or(z.literal("")),
+  year: z.coerce.number().int().min(1900).max(2200),
+  month: z.coerce.number().int().min(1).max(12),
+  limit: amountCents,
+});
+
+export const financialGoalSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().min(1, "Informe o nome da meta").max(80),
+  target: amountCents,
+  current: amountCents.optional(),
+  deadline: z.string().optional().or(z.literal("")),
+  color: z.string().min(4).max(9),
+  notes: z.string().max(500).optional().or(z.literal("")),
+});

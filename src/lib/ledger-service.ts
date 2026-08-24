@@ -5,6 +5,7 @@ import {
   computeAccountBalancesFromTotals,
   isCancelled,
   ledgerDayFromWallClock,
+  startOfLedgerDay,
   isOverdue,
   isSettled,
   isTransfer,
@@ -875,4 +876,171 @@ export async function getBills(
     ),
     categories: categoryRows,
   };
+}
+
+/* -------------------------------------------------------------------------- */
+/*                          ORÇAMENTOS E METAS                                */
+/* -------------------------------------------------------------------------- */
+
+export interface BudgetLine {
+  id: string | null;
+  categoryId: string | null;
+  categoryName: string;
+  categoryColor: string;
+  limitCents: number;
+  spentCents: number;
+  /** Sobra. Negativo quando estourou. */
+  remainingCents: number;
+  /** 0–100 para a barra; o excedente aparece pelo `exceeded`, não por >100. */
+  percent: number;
+  exceeded: boolean;
+}
+
+export interface BudgetsView {
+  year: number;
+  month: number;
+  /** Uma linha por categoria orçada. */
+  lines: BudgetLine[];
+  /** O teto do mês inteiro, quando definido. */
+  total: BudgetLine | null;
+  /** Categorias de despesa ainda sem orçamento, para o formulário. */
+  categoriesWithoutBudget: LedgerCategory[];
+}
+
+export interface GoalLine {
+  id: string;
+  name: string;
+  targetCents: number;
+  currentCents: number;
+  percent: number;
+  color: string;
+  deadline: Date | null;
+  notes: string | null;
+  /** Dias até o prazo. Negativo = venceu. Nulo quando não há prazo. */
+  daysLeft: number | null;
+  reached: boolean;
+}
+
+/**
+ * Orçamento do mês cruzado com o gasto REALIZADO.
+ *
+ * "Gasto" aqui é só o liquidado: um orçamento que já contasse a conta ainda não
+ * paga acusaria estouro antes de o dinheiro sair, e a pessoa mudaria de
+ * comportamento por um número que ainda não aconteceu.
+ */
+export async function getBudgets(
+  userId: string,
+  year: number,
+  month: number
+): Promise<BudgetsView> {
+  await ensureLedgerBootstrap(userId);
+  const { start, end } = ledgerMonthRange(year, month);
+
+  const [budgets, spentByCategory, categories] = await Promise.all([
+    prisma.budget.findMany({
+      where: { userId, year, month },
+      include: { category: { select: { name: true, color: true } } },
+    }),
+    prisma.transaction.groupBy({
+      by: ["categoryId"],
+      where: {
+        userId,
+        type: "SAIDA",
+        status: "LIQUIDADO",
+        transferGroupId: null,
+        date: { gte: start, lte: end },
+      },
+      _sum: { amountCents: true },
+    }),
+    prisma.category.findMany({
+      where: { userId, archived: false, type: "SAIDA" },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true, type: true, color: true },
+    }),
+  ]);
+
+  const spentMap = new Map(
+    spentByCategory.map((row) => [row.categoryId ?? "__none__", row._sum.amountCents ?? 0])
+  );
+  const totalSpent = spentByCategory.reduce((sum, row) => sum + (row._sum.amountCents ?? 0), 0);
+
+  function line(
+    id: string | null,
+    categoryId: string | null,
+    name: string,
+    color: string,
+    limitCents: number,
+    spentCents: number
+  ): BudgetLine {
+    return {
+      id,
+      categoryId,
+      categoryName: name,
+      categoryColor: color,
+      limitCents,
+      spentCents,
+      remainingCents: limitCents - spentCents,
+      percent: limitCents > 0 ? Math.min(100, Math.round((spentCents / limitCents) * 100)) : 0,
+      exceeded: spentCents > limitCents,
+    };
+  }
+
+  const perCategory = budgets.filter((b) => b.categoryId !== null);
+  const totalBudget = budgets.find((b) => b.categoryId === null) ?? null;
+
+  const lines = perCategory
+    .map((b) =>
+      line(
+        b.id,
+        b.categoryId,
+        b.category?.name ?? "Categoria removida",
+        b.category?.color ?? "#898781",
+        b.limitCents,
+        spentMap.get(b.categoryId!) ?? 0
+      )
+    )
+    .sort((a, b) => b.percent - a.percent || b.spentCents - a.spentCents);
+
+  const orcadas = new Set(perCategory.map((b) => b.categoryId));
+
+  return {
+    year,
+    month,
+    lines,
+    total: totalBudget
+      ? line(totalBudget.id, null, "Orçamento total do mês", "#2a78d6", totalBudget.limitCents, totalSpent)
+      : null,
+    categoriesWithoutBudget: categories.filter((c) => !orcadas.has(c.id)),
+  };
+}
+
+/** Metas ativas, com progresso e prazo já calculados. */
+export async function getFinancialGoals(
+  userId: string,
+  referenceDate: Date = new Date()
+): Promise<GoalLine[]> {
+  const goals = await prisma.financialGoal.findMany({
+    where: { userId, archived: false },
+    orderBy: { createdAt: "asc" },
+  });
+
+  const today = ledgerDayFromWallClock(referenceDate);
+
+  return goals.map((goal) => ({
+    id: goal.id,
+    name: goal.name,
+    targetCents: goal.targetCents,
+    currentCents: goal.currentCents,
+    percent:
+      goal.targetCents > 0
+        ? Math.min(100, Math.round((goal.currentCents / goal.targetCents) * 100))
+        : 0,
+    color: goal.color,
+    deadline: goal.deadline,
+    notes: goal.notes,
+    daysLeft: goal.deadline
+      ? Math.round((startOfLedgerDay(goal.deadline).getTime() - today.getTime()) / 86_400_000)
+      : null,
+    reached: goal.currentCents >= goal.targetCents,
+  }));
 }

@@ -14,7 +14,9 @@ import {
 import { appDateString } from "@/lib/timezone";
 import {
   accountSchema,
+  budgetSchema,
   categorySchema,
+  financialGoalSchema,
   installmentSchema,
   recurringTransactionSchema,
   transactionSchema,
@@ -687,5 +689,136 @@ export async function createTransfer(formData: FormData): Promise<FormResult> {
   });
 
   revalidateLedger();
+  return { success: true };
+}
+
+/* ------------------------------- Orçamentos ------------------------------ */
+
+function revalidateBudgets() {
+  revalidatePath("/financeiro");
+  revalidatePath("/financeiro/orcamentos");
+}
+
+/**
+ * Cria ou atualiza o teto de uma categoria num mês.
+ *
+ * Usa `upsert` sobre a chave única (usuário, categoria, ano, mês) para que
+ * "definir orçamento" e "mudar orçamento" sejam a mesma ação — o formulário não
+ * precisa saber se já existe um.
+ */
+export async function saveBudget(formData: FormData): Promise<FormResult> {
+  const user = await requireUser();
+
+  const parsed = budgetSchema.safeParse({
+    id: formData.get("id") || undefined,
+    categoryId: formData.get("categoryId") ?? "",
+    year: formData.get("year"),
+    month: formData.get("month"),
+    limit: formData.get("limit"),
+  });
+
+  if (!parsed.success) return { success: false, error: parsed.error.issues[0]?.message };
+
+  const { categoryId, year, month, limit } = parsed.data;
+
+  if (categoryId) {
+    const category = await prisma.category.findFirst({
+      where: { id: categoryId, userId: user.id },
+    });
+    if (!category) return { success: false, error: "Categoria não encontrada" };
+    if (category.type !== "SAIDA") {
+      return { success: false, error: "Só faz sentido orçar categorias de despesa" };
+    }
+  }
+
+  if (categoryId) {
+    await prisma.budget.upsert({
+      where: {
+        userId_categoryId_year_month: { userId: user.id, categoryId, year, month },
+      },
+      create: { userId: user.id, categoryId, year, month, limitCents: limit },
+      update: { limitCents: limit },
+    });
+  } else {
+    // O orçamento TOTAL tem `categoryId` nulo, e no Postgres nulos não colidem
+    // — a chave única composta não o alcança. A unicidade real vem do índice
+    // parcial criado na migration; aqui a busca é explícita.
+    const existing = await prisma.budget.findFirst({
+      where: { userId: user.id, categoryId: null, year, month },
+    });
+    if (existing) {
+      await prisma.budget.update({ where: { id: existing.id }, data: { limitCents: limit } });
+    } else {
+      await prisma.budget.create({
+        data: { userId: user.id, categoryId: null, year, month, limitCents: limit },
+      });
+    }
+  }
+
+  revalidateBudgets();
+  return { success: true };
+}
+
+export async function deleteBudget(id: string): Promise<FormResult> {
+  const user = await requireUser();
+  const existing = await prisma.budget.findFirst({ where: { id, userId: user.id } });
+  if (!existing) return { success: false, error: "Orçamento não encontrado" };
+
+  await prisma.budget.delete({ where: { id } });
+  revalidateBudgets();
+  return { success: true };
+}
+
+/* --------------------------------- Metas --------------------------------- */
+
+export async function saveFinancialGoal(formData: FormData): Promise<FormResult> {
+  const user = await requireUser();
+
+  const parsed = financialGoalSchema.safeParse({
+    id: formData.get("id") || undefined,
+    name: formData.get("name"),
+    target: formData.get("target"),
+    current: formData.get("current") || undefined,
+    deadline: formData.get("deadline") ?? "",
+    color: formData.get("color") || "#2a78d6",
+    notes: formData.get("notes") ?? "",
+  });
+
+  if (!parsed.success) return { success: false, error: parsed.error.issues[0]?.message };
+
+  const { id, name, target, current, deadline, color, notes } = parsed.data;
+
+  const data = {
+    name,
+    targetCents: target,
+    currentCents: current ?? 0,
+    deadline: deadline ? ledgerDayFromISO(deadline) : null,
+    color,
+    notes: notes || null,
+  };
+
+  if (id) {
+    const existing = await prisma.financialGoal.findFirst({ where: { id, userId: user.id } });
+    if (!existing) return { success: false, error: "Meta não encontrada" };
+    await prisma.financialGoal.update({ where: { id }, data });
+  } else {
+    await prisma.financialGoal.create({ data: { ...data, userId: user.id } });
+  }
+
+  revalidateBudgets();
+  return { success: true };
+}
+
+/**
+ * Arquiva em vez de apagar. É a orientação do próprio projeto para dado
+ * financeiro: uma meta atingida é histórico que vale guardar.
+ */
+export async function archiveFinancialGoal(id: string): Promise<FormResult> {
+  const user = await requireUser();
+  const existing = await prisma.financialGoal.findFirst({ where: { id, userId: user.id } });
+  if (!existing) return { success: false, error: "Meta não encontrada" };
+
+  await prisma.financialGoal.update({ where: { id }, data: { archived: true } });
+  revalidateBudgets();
   return { success: true };
 }
