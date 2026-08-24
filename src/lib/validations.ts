@@ -169,8 +169,21 @@ const amountCents = z.string().min(1, "Informe o valor").transform((value, ctx) 
   return cents;
 });
 
+export const transactionStatus = z.enum(["PENDENTE", "LIQUIDADO", "AGENDADO", "CANCELADO"]);
+
+export const paymentMethod = z.enum([
+  "DINHEIRO",
+  "PIX",
+  "DEBITO",
+  "CREDITO",
+  "BOLETO",
+  "TRANSFERENCIA",
+  "OUTRO",
+]);
+
 export const transactionSchema = z.object({
   id: z.string().optional(),
+  /** COMPETÊNCIA: o mês a que o lançamento pertence. É ela que recorta a visão mensal. */
   date: z.string().min(1, "Informe a data"),
   description: z.string().min(1, "Informe a descrição").max(200),
   amount: amountCents,
@@ -178,6 +191,13 @@ export const transactionSchema = z.object({
   accountId: z.string().min(1, "Selecione a conta"),
   categoryId: z.string().optional().or(z.literal("")),
   notes: z.string().max(500).optional().or(z.literal("")),
+  /** Ausente = LIQUIDADO, que é como o módulo se comportava antes da coluna. */
+  status: transactionStatus.optional(),
+  /** Vencimento. Vazio significa "vence na data de competência". */
+  dueDate: z.string().optional().or(z.literal("")),
+  /** Data em que o dinheiro se moveu. Só faz sentido quando LIQUIDADO. */
+  settledDate: z.string().optional().or(z.literal("")),
+  paymentMethod: paymentMethod.optional().or(z.literal("")),
 });
 export type TransactionInput = z.infer<typeof transactionSchema>;
 

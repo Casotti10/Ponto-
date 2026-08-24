@@ -7,7 +7,8 @@ interface StatCardProps {
   value: string;
   icon: LucideIcon;
   hint?: string;
-  tone?: "neutral" | "good" | "bad";
+  /** `warn` é para o que pede atenção sem ser ruim — uma conta a vencer. */
+  tone?: "neutral" | "good" | "bad" | "warn";
   iconColor?: string;
 }
 
@@ -30,7 +31,8 @@ export function StatCard({ label, value, icon: Icon, hint, tone = "neutral", ico
             className={cn(
               "text-2xl font-semibold leading-tight",
               tone === "good" && "text-emerald-600 dark:text-emerald-400",
-              tone === "bad" && "text-red-600 dark:text-red-400"
+              tone === "bad" && "text-red-600 dark:text-red-400",
+              tone === "warn" && "text-amber-600 dark:text-amber-500"
             )}
           >
             {value}

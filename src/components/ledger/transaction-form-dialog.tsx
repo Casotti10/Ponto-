@@ -22,6 +22,8 @@ import { saveTransaction } from "@/lib/actions/ledger";
 import { centsToBRL, parseAmountToCents, MONTH_NAMES } from "@/lib/ledger-calc";
 import { appDateString } from "@/lib/timezone";
 
+export type LedgerStatus = "PENDENTE" | "LIQUIDADO" | "AGENDADO" | "CANCELADO";
+
 export interface TransactionFormValues {
   id?: string;
   date: string;
@@ -31,6 +33,21 @@ export interface TransactionFormValues {
   accountId: string;
   categoryId?: string | null;
   notes?: string | null;
+  status?: LedgerStatus;
+  dueDate?: string | null;
+}
+
+/**
+ * LIQUIDADO é um estado só, mas o usuário não pensa assim: numa saída ele diz
+ * "paguei" e numa entrada "recebi". O enum não se divide — o rótulo sim.
+ */
+function statusLabels(type: "ENTRADA" | "SAIDA"): Record<LedgerStatus, string> {
+  return {
+    LIQUIDADO: type === "ENTRADA" ? "Recebido" : "Pago",
+    PENDENTE: type === "ENTRADA" ? "A receber" : "A pagar",
+    AGENDADO: "Agendado",
+    CANCELADO: "Cancelado",
+  };
 }
 
 interface Props {
@@ -77,6 +94,15 @@ export function TransactionFormDialog({
   // A data é controlada para que o aviso de destino ("Aparece em Setembro de
   // 2026") acompanhe o campo enquanto o usuário digita.
   const [date, setDate] = useState(fallbackDate);
+  // A situação é controlada porque decide o resto do formulário: só um
+  // lançamento liquidado tem data de pagamento, e o rótulo muda com o tipo
+  // ("Pago" numa saída, "Recebido" numa entrada).
+  const [status, setStatus] = useState<LedgerStatus>(initialValues?.status ?? "LIQUIDADO");
+
+  // Vencimento acompanha a competência enquanto o usuário não o define à mão —
+  // é o caso da esmagadora maioria dos lançamentos.
+  const [dueDate, setDueDate] = useState(initialValues?.dueDate ?? fallbackDate);
+  const [dueTouched, setDueTouched] = useState(false);
 
   // Reancoragem no padrão "ajustar estado durante a renderização" (e não num
   // efeito, que dispararia uma renderização em cascata): cada abertura do
@@ -88,7 +114,10 @@ export function TransactionFormDialog({
   if (lastAnchor !== anchor) {
     setLastAnchor(anchor);
     setDate(fallbackDate);
+    if (!dueTouched) setDueDate(initialValues?.dueDate ?? fallbackDate);
   }
+
+  const labels = statusLabels(type);
 
   const availableCategories = useMemo(
     () => categories.filter((c) => c.type === type),
@@ -201,10 +230,58 @@ export function TransactionFormDialog({
                   type="date"
                   required
                   value={date}
-                  onChange={(e) => setDate(e.target.value)}
+                  onChange={(e) => {
+                    setDate(e.target.value);
+                    if (!dueTouched) setDueDate(e.target.value);
+                  }}
                 />
                 <p className="text-xs text-muted-foreground">
                   {targetPeriod ? `Aparece em ${targetPeriod}` : "Data inválida"}
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="status">Situação</Label>
+                <select
+                  id="status"
+                  name="status"
+                  value={status}
+                  onChange={(e) => setStatus(e.target.value as LedgerStatus)}
+                  className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+                >
+                  {(["LIQUIDADO", "PENDENTE", "AGENDADO", "CANCELADO"] as const).map((s) => (
+                    <option key={s} value={s}>
+                      {labels[s]}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-muted-foreground">
+                  {status === "LIQUIDADO"
+                    ? "Conta no saldo atual"
+                    : status === "CANCELADO"
+                      ? "Não impacta nenhum saldo"
+                      : "Só no saldo projetado, não no atual"}
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="dueDate">Vencimento</Label>
+                <Input
+                  id="dueDate"
+                  name="dueDate"
+                  type="date"
+                  value={dueDate}
+                  onChange={(e) => {
+                    setDueTouched(true);
+                    setDueDate(e.target.value);
+                  }}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {status === "LIQUIDADO"
+                    ? "Opcional quando já foi liquidado"
+                    : "Depois desta data o lançamento aparece como vencido"}
                 </p>
               </div>
             </div>

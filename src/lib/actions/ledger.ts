@@ -46,13 +46,30 @@ export async function saveTransaction(formData: FormData): Promise<FormResult> {
     accountId: formData.get("accountId"),
     categoryId: formData.get("categoryId") ?? "",
     notes: formData.get("notes") ?? "",
+    status: formData.get("status") || undefined,
+    dueDate: formData.get("dueDate") ?? "",
+    settledDate: formData.get("settledDate") ?? "",
+    paymentMethod: formData.get("paymentMethod") ?? "",
   });
 
   if (!parsed.success) {
     return { success: false, error: parsed.error.issues[0]?.message };
   }
 
-  const { id, date, description, amount, type, accountId, categoryId, notes } = parsed.data;
+  const {
+    id,
+    date,
+    description,
+    amount,
+    type,
+    accountId,
+    categoryId,
+    notes,
+    status = "LIQUIDADO",
+    dueDate,
+    settledDate,
+    paymentMethod,
+  } = parsed.data;
 
   // A conta e a categoria precisam pertencer ao usuário — sem isso, um id
   // forjado no formulário lançaria dinheiro na conta de outra pessoa.
@@ -78,6 +95,18 @@ export async function saveTransaction(formData: FormData): Promise<FormResult> {
     accountId,
     categoryId: categoryId || null,
     notes: notes || null,
+    status,
+    // Sem vencimento informado, vence na própria competência — é o caso da
+    // esmagadora maioria dos lançamentos, e deixar nulo obrigaria todo filtro
+    // de vencimento a um COALESCE.
+    dueDate: dueDate ? ledgerDayFromISO(dueDate) : ledgerDayFromISO(date),
+    // Coerência: só um lançamento LIQUIDADO tem data de liquidação. Aceitar uma
+    // em algo pendente produziria a contradição "não pago, pago em 08/09".
+    settledDate:
+      status === "LIQUIDADO"
+        ? ledgerDayFromISO(settledDate || dueDate || date)
+        : null,
+    paymentMethod: paymentMethod || null,
   };
 
   if (id) {

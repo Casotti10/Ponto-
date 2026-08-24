@@ -10,6 +10,8 @@ import {
   ArrowDownRight,
   ArrowUpRight,
   CalendarX,
+  AlertTriangle,
+  Sparkles,
   FileUp,
 } from "lucide-react";
 import { requireUser } from "@/lib/auth";
@@ -220,7 +222,60 @@ export default async function FinanceiroPage({
           icon={PiggyBank}
           tone={totalCash >= 0 ? "good" : "bad"}
           iconColor={ledgerColors.light.balance}
-          hint={`${activeAccounts.length} conta(s)`}
+          hint={`${activeAccounts.length} conta(s) · só o liquidado`}
+        />
+      </div>
+
+      {/* SEGUNDA LINHA — o previsto.
+          Separada da primeira de propósito: em cima está o dinheiro que existe,
+          aqui o que ainda vai acontecer. Misturar os dois é o que faz um app
+          financeiro anunciar saldo que não está na conta. */}
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <StatCard
+          label="A receber"
+          value={centsToBRL(totals.pendingIncomeCents)}
+          icon={ArrowUpRight}
+          tone={totals.pendingIncomeCents > 0 ? "good" : "neutral"}
+          iconColor={ledgerColors.light.income}
+          hint={
+            totals.overdueIncomeCents > 0
+              ? `${centsToBRL(totals.overdueIncomeCents)} em atraso`
+              : "Nada em atraso"
+          }
+        />
+        <StatCard
+          label="A pagar"
+          value={centsToBRL(totals.pendingExpenseCents)}
+          icon={ArrowDownRight}
+          tone={totals.pendingExpenseCents > 0 ? "warn" : "neutral"}
+          iconColor={ledgerColors.light.expense}
+          hint={
+            totals.overdueExpenseCents > 0
+              ? `${centsToBRL(totals.overdueExpenseCents)} vencido`
+              : "Nada vencido"
+          }
+        />
+        <StatCard
+          label="Vencidos"
+          value={centsToBRL(totals.overdueExpenseCents + totals.overdueIncomeCents)}
+          icon={AlertTriangle}
+          tone={totals.overdueExpenseCents + totals.overdueIncomeCents > 0 ? "bad" : "good"}
+          iconColor={ledgerColors.light.expense}
+          hint={
+            totals.overdueExpenseCents + totals.overdueIncomeCents > 0
+              ? "Passou da data de vencimento"
+              : "Tudo em dia"
+          }
+        />
+        <StatCard
+          label="Saldo projetado"
+          value={centsToSignedBRL(totalCash + totals.pendingIncomeCents - totals.pendingExpenseCents)}
+          icon={Sparkles}
+          tone={
+            totalCash + totals.pendingIncomeCents - totals.pendingExpenseCents >= 0 ? "good" : "bad"
+          }
+          iconColor={ledgerColors.light.projection}
+          hint="Caixa + a receber − a pagar"
         />
       </div>
 
@@ -430,6 +485,11 @@ export default async function FinanceiroPage({
                       accountId: tx.accountId,
                       categoryId: tx.categoryId,
                       notes: tx.notes,
+                      // Sem estes dois, editar um lançamento pendente o
+                      // rebaixaria a liquidado ao salvar — o formulário cai
+                      // no padrão quando não recebe a situação atual.
+                      status: tx.status,
+                      dueDate: tx.dueDate ? ledgerDayToISO(tx.dueDate) : null,
                     }}
                   />
                 </div>
