@@ -10,6 +10,8 @@
 import {
   summarizeTransactions,
   ledgerDayFromWallClock,
+  splitInstallments,
+  installmentDueDates,
   computeAccountBalances,
   breakdownByCategory,
   buildDailyFlow,
@@ -176,6 +178,38 @@ console.log("\n== fronteira de fuso: relogio de parede -> dia contabil ==");
 
   const venceuOntem = tx({ amountCents: 10000, type: "SAIDA", status: "PENDENTE", dueDate: ledgerDayFromISO("2026-08-23") });
   check("conta de ontem esta vencida", isOverdue(venceuOntem, hoje), true);
+}
+
+console.log("\n== parcelamento: a soma tem que fechar ==");
+check("3600 em 12x da 300 exato", splitInstallments(360000, 12), Array(12).fill(30000));
+// 100,00 em 3x: 33,34 + 33,33 + 33,33 = 100,00. Arredondar cada uma daria 99,99.
+check("100 em 3x distribui o centavo", splitInstallments(10000, 3), [3334, 3333, 3333]);
+check("soma de 100/3x fecha", splitInstallments(10000, 3).reduce((a, b) => a + b, 0), 10000);
+check("soma de 1000/7x fecha", splitInstallments(100000, 7).reduce((a, b) => a + b, 0), 100000);
+check("1 parcela = o total", splitInstallments(12345, 1), [12345]);
+check("zero parcelas = vazio", splitInstallments(1000, 0), []);
+
+console.log("\n== vencimentos: dia 31 nao pode transbordar ==");
+{
+  const datas = installmentDueDates(ledgerDayFromISO("2026-01-31"), 4);
+  check(
+    "31/01 -> 28/02 -> 31/03 -> 30/04",
+    datas.map((d) => d.toISOString().slice(0, 10)),
+    ["2026-01-31", "2026-02-28", "2026-03-31", "2026-04-30"]
+  );
+}
+{
+  // Ano bissexto: 2028 tem 29 de fevereiro.
+  const datas = installmentDueDates(ledgerDayFromISO("2028-01-31"), 2);
+  check("bissexto", datas[1].toISOString().slice(0, 10), "2028-02-29");
+}
+{
+  const datas = installmentDueDates(ledgerDayFromISO("2026-11-15"), 4);
+  check(
+    "vira o ano",
+    datas.map((d) => d.toISOString().slice(0, 10)),
+    ["2026-11-15", "2026-12-15", "2027-01-15", "2027-02-15"]
+  );
 }
 
 console.log(fails === 0 ? "\n>>> TODOS PASSARAM\n" : `\n>>> ${fails} FALHA(S)\n`);

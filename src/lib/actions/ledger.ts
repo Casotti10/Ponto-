@@ -1,16 +1,24 @@
 "use server";
 
+import { randomUUID } from "crypto";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
-import { ledgerDayFromISO, parseAmountToCents } from "@/lib/ledger-calc";
+import {
+  installmentDueDates,
+  ledgerDayFromISO,
+  parseAmountToCents,
+  splitInstallments,
+} from "@/lib/ledger-calc";
 import { appDateString } from "@/lib/timezone";
 import {
   accountSchema,
   categorySchema,
+  installmentSchema,
   recurringTransactionSchema,
   transactionSchema,
+  transferSchema,
 } from "@/lib/validations";
 import type { FormResult } from "@/lib/actions/time-entries";
 
@@ -514,6 +522,168 @@ export async function unsettleTransaction(id: string): Promise<FormResult> {
     before: { status: "LIQUIDADO", settledDate: existing.settledDate },
     after: { status: "PENDENTE", settledDate: null },
     reason: "Baixa desfeita",
+  });
+
+  revalidateLedger();
+  return { success: true };
+}
+
+/* ----------------------------- Parcelamento ------------------------------ */
+
+/**
+ * Registra uma compra parcelada como N lançamentos reais.
+ *
+ * Cada parcela é uma `Transaction` própria, com vencimento e situação próprios,
+ * unidas por `installmentGroupId`. Não existe "lançamento pai" com filhos
+ * virtuais: assim a parcela aparece naturalmente no mês dela, pode ser paga
+ * isoladamente e entra em contas a pagar como qualquer outra conta.
+ *
+ * A COMPETÊNCIA de cada parcela é o mês do seu próprio vencimento. É isso que
+ * faz a parcela 3/12 aparecer em outubro em vez de empilhar as doze no mês da
+ * compra.
+ */
+export async function createInstallmentPurchase(formData: FormData): Promise<FormResult> {
+  const user = await requireUser();
+
+  const parsed = installmentSchema.safeParse({
+    description: formData.get("description"),
+    amount: formData.get("amount"),
+    count: formData.get("count"),
+    firstDueDate: formData.get("firstDueDate"),
+    type: formData.get("type"),
+    accountId: formData.get("accountId"),
+    categoryId: formData.get("categoryId") ?? "",
+    notes: formData.get("notes") ?? "",
+  });
+
+  if (!parsed.success) {
+    return { success: false, error: parsed.error.issues[0]?.message };
+  }
+
+  const { description, amount, count, firstDueDate, type, accountId, categoryId, notes } = parsed.data;
+
+  const account = await prisma.account.findFirst({ where: { id: accountId, userId: user.id } });
+  if (!account) return { success: false, error: "Conta não encontrada" };
+
+  if (categoryId) {
+    const category = await prisma.category.findFirst({ where: { id: categoryId, userId: user.id } });
+    if (!category) return { success: false, error: "Categoria não encontrada" };
+    if (category.type !== type) {
+      return { success: false, error: "A categoria não corresponde ao tipo do lançamento" };
+    }
+  }
+
+  const values = splitInstallments(amount, count);
+  const dueDates = installmentDueDates(ledgerDayFromISO(firstDueDate), count);
+  const groupId = randomUUID();
+
+  await prisma.transaction.createMany({
+    data: values.map((amountCents, index) => ({
+      userId: user.id,
+      accountId,
+      categoryId: categoryId || null,
+      // Competência = mês do próprio vencimento, e não o mês da compra.
+      date: dueDates[index],
+      dueDate: dueDates[index],
+      settledDate: null,
+      description: `${description} (${index + 1}/${count})`,
+      amountCents,
+      type,
+      // Parcela futura é dívida, não gasto realizado: nasce pendente para não
+      // reduzir o saldo de hoje.
+      status: "PENDENTE" as const,
+      notes: notes || null,
+      installmentGroupId: groupId,
+      installmentNumber: index + 1,
+      installmentTotal: count,
+    })),
+  });
+
+  await logAudit({
+    userId: user.id,
+    entity: "TRANSACTION",
+    entityId: groupId,
+    action: "CREATE",
+    after: { description, totalCents: amount, parcelas: count },
+    reason: "Compra parcelada",
+  });
+
+  revalidateLedger();
+  return { success: true };
+}
+
+/* ----------------------------- Transferência ----------------------------- */
+
+/**
+ * Move dinheiro entre duas contas do próprio usuário.
+ *
+ * Grava um PAR de lançamentos com o mesmo `transferGroupId`: saída na origem,
+ * entrada no destino. As duas pernas contam no saldo das suas contas e nenhuma
+ * conta como receita ou despesa — transferir R$ 500 da corrente para a poupança
+ * não é ganhar nem gastar R$ 500, e registrar isso como dois lançamentos soltos
+ * inflaria os dois lados do resultado do mês.
+ */
+export async function createTransfer(formData: FormData): Promise<FormResult> {
+  const user = await requireUser();
+
+  const parsed = transferSchema.safeParse({
+    fromAccountId: formData.get("fromAccountId"),
+    toAccountId: formData.get("toAccountId"),
+    amount: formData.get("amount"),
+    date: formData.get("date"),
+    description: formData.get("description") ?? "",
+  });
+
+  if (!parsed.success) {
+    return { success: false, error: parsed.error.issues[0]?.message };
+  }
+
+  const { fromAccountId, toAccountId, amount, date, description } = parsed.data;
+
+  if (fromAccountId === toAccountId) {
+    return { success: false, error: "Escolha contas diferentes para origem e destino" };
+  }
+
+  // As DUAS precisam ser do usuário: sem esta checagem um id forjado moveria
+  // dinheiro para a conta de outra pessoa.
+  const accounts = await prisma.account.findMany({
+    where: { id: { in: [fromAccountId, toAccountId] }, userId: user.id },
+  });
+  if (accounts.length !== 2) return { success: false, error: "Conta não encontrada" };
+
+  const from = accounts.find((a) => a.id === fromAccountId)!;
+  const to = accounts.find((a) => a.id === toAccountId)!;
+  const day = ledgerDayFromISO(date);
+  const groupId = randomUUID();
+  const label = description || `Transferência ${from.name} → ${to.name}`;
+
+  const common = {
+    userId: user.id,
+    date: day,
+    dueDate: day,
+    settledDate: day,
+    amountCents: amount,
+    // Transferência registrada é transferência que aconteceu.
+    status: "LIQUIDADO" as const,
+    categoryId: null,
+    transferGroupId: groupId,
+    paymentMethod: "TRANSFERENCIA" as const,
+  };
+
+  await prisma.transaction.createMany({
+    data: [
+      { ...common, accountId: fromAccountId, type: "SAIDA" as const, description: label },
+      { ...common, accountId: toAccountId, type: "ENTRADA" as const, description: label },
+    ],
+  });
+
+  await logAudit({
+    userId: user.id,
+    entity: "TRANSACTION",
+    entityId: groupId,
+    action: "CREATE",
+    after: { de: from.name, para: to.name, amountCents: amount },
+    reason: "Transferência entre contas",
   });
 
   revalidateLedger();

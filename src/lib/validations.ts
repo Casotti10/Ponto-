@@ -298,3 +298,25 @@ export const reportRangeSchema = z.object({
   start: z.string().min(1),
   end: z.string().min(1),
 });
+
+/** Compra parcelada: gera N lançamentos, um por mês. */
+export const installmentSchema = z.object({
+  description: z.string().min(1, "Informe a descrição").max(180),
+  /** Valor TOTAL da compra, não o da parcela. */
+  amount: amountCents,
+  count: z.coerce.number().int().min(2, "Parcelamento começa em 2 vezes").max(72, "Máximo de 72 parcelas"),
+  firstDueDate: z.string().min(1, "Informe o vencimento da primeira parcela"),
+  type: z.enum(["ENTRADA", "SAIDA"]),
+  accountId: z.string().min(1, "Selecione a conta"),
+  categoryId: z.string().optional().or(z.literal("")),
+  notes: z.string().max(500).optional().or(z.literal("")),
+});
+
+/** Transferência entre contas do próprio usuário. */
+export const transferSchema = z.object({
+  fromAccountId: z.string().min(1, "Selecione a conta de origem"),
+  toAccountId: z.string().min(1, "Selecione a conta de destino"),
+  amount: amountCents,
+  date: z.string().min(1, "Informe a data"),
+  description: z.string().max(180).optional().or(z.literal("")),
+});

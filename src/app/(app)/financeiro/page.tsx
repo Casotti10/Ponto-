@@ -12,6 +12,7 @@ import {
   CalendarX,
   AlertTriangle,
   Sparkles,
+  Layers,
   FileUp,
 } from "lucide-react";
 import { requireUser } from "@/lib/auth";
@@ -38,6 +39,7 @@ import { AccountFilter } from "@/components/ledger/account-filter";
 import { MonthlySummary } from "@/components/ledger/monthly-summary";
 import { TransactionFormDialog } from "@/components/ledger/transaction-form-dialog";
 import { ImportStatementDialog } from "@/components/ledger/import-statement-dialog";
+import { AdvancedEntryDialog } from "@/components/ledger/advanced-entry-dialog";
 import { TransactionRowActions } from "@/components/ledger/transaction-row-actions";
 import { CashflowChart, type CashflowPoint } from "@/components/ledger/cashflow-chart";
 import { YearBalanceChart, type YearBalancePoint } from "@/components/ledger/year-balance-chart";
@@ -165,6 +167,14 @@ export default async function FinanceiroPage({
               <FileUp className="h-4 w-4" /> Importar extrato
             </ImportStatementDialog>
           )}
+          <AdvancedEntryDialog
+            accounts={accountOptions}
+            categories={categories}
+            defaultDate={defaultDate}
+            trigger={<Button variant="outline" className="gap-1.5" />}
+          >
+            <Layers className="h-4 w-4" /> Parcelar / transferir
+          </AdvancedEntryDialog>
           <TransactionFormDialog
             accounts={accountOptions}
             categories={categories}

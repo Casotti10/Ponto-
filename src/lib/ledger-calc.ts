@@ -650,3 +650,46 @@ export const FREQUENCY_LABELS: Record<string, string> = {
   SEMANAL: "Semanal",
   ANUAL: "Anual",
 };
+
+/* -------------------------------------------------------------------------- */
+/*                                Parcelamento                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Divide um total em N parcelas cujo somatório é EXATAMENTE o total.
+ *
+ * `Math.round(total / n)` em cada parcela não serve: R$ 100,00 em 3 vezes daria
+ * 33,33 três vezes e perderia um centavo, e o usuário acabaria devendo 99,99
+ * por uma compra de 100,00. O resto é distribuído centavo a centavo nas
+ * primeiras parcelas — a convenção do comércio, onde a primeira é a "quebrada".
+ */
+export function splitInstallments(totalCents: number, count: number): number[] {
+  if (count < 1) return [];
+  const base = Math.floor(totalCents / count);
+  const remainder = totalCents - base * count;
+
+  return Array.from({ length: count }, (_, i) => base + (i < remainder ? 1 : 0));
+}
+
+/**
+ * Vencimentos mês a mês a partir do primeiro.
+ *
+ * O dia é PRESERVADO quando cabe no mês de destino e recuado para o último dia
+ * quando não cabe: uma parcela que vence dia 31 vence em 28 de fevereiro, não
+ * em 3 de março. `setMonth` sozinho transborda em silêncio, o que jogaria a
+ * parcela para o mês seguinte — e, com ela, para o mês errado do razão.
+ */
+export function installmentDueDates(firstDue: Date, count: number): Date[] {
+  const year = firstDue.getUTCFullYear();
+  const month = firstDue.getUTCMonth();
+  const day = firstDue.getUTCDate();
+
+  return Array.from({ length: count }, (_, i) => {
+    const targetMonth = month + i;
+    const targetYear = year + Math.floor(targetMonth / 12);
+    const normalizedMonth = ((targetMonth % 12) + 12) % 12;
+    // Dia 0 do mês seguinte = último dia deste mês.
+    const lastDay = new Date(Date.UTC(targetYear, normalizedMonth + 1, 0)).getUTCDate();
+    return new Date(Date.UTC(targetYear, normalizedMonth, Math.min(day, lastDay)));
+  });
+}
