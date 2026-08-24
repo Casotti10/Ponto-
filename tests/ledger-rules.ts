@@ -9,6 +9,7 @@
  */
 import {
   summarizeTransactions,
+  ledgerDayFromWallClock,
   computeAccountBalances,
   breakdownByCategory,
   buildDailyFlow,
@@ -155,6 +156,27 @@ const antigo = summarizeTransactions(
 );
 check("sem status = tratado como realizado", [antigo.incomeCents, antigo.expenseCents], [10000, 4000]);
 check("nada vira pendente", [antigo.pendingIncomeCents, antigo.pendingExpenseCents], [0, 0]);
+
+console.log("\n== fronteira de fuso: relogio de parede -> dia contabil ==");
+// `appNow()` devolve um Date cujos componentes LOCAIS sao o relogio do fuso do
+// app. Ler esse Date com getters UTC (o que `startOfLedgerDay` faz, e faz
+// certo para datas do banco) daria o dia seguinte numa maquina a oeste de
+// Greenwich depois das 21h — e uma conta que vence amanha apareceria vencida.
+{
+  // Componentes LOCAIS fixos, entao o caso vale em qualquer fuso de maquina.
+  const noite = new Date(2026, 7, 24, 21, 30);
+  const hoje = ledgerDayFromWallClock(noite);
+  check("dia contabil sai do componente local", hoje.toISOString().slice(0, 10), "2026-08-24");
+
+  const venceAmanha = tx({ amountCents: 10000, type: "SAIDA", status: "PENDENTE", dueDate: ledgerDayFromISO("2026-08-25") });
+  check("conta de amanha NAO esta vencida", isOverdue(venceAmanha, hoje), false);
+
+  const venceHoje = tx({ amountCents: 10000, type: "SAIDA", status: "PENDENTE", dueDate: ledgerDayFromISO("2026-08-24") });
+  check("conta de hoje ainda NAO venceu", isOverdue(venceHoje, hoje), false);
+
+  const venceuOntem = tx({ amountCents: 10000, type: "SAIDA", status: "PENDENTE", dueDate: ledgerDayFromISO("2026-08-23") });
+  check("conta de ontem esta vencida", isOverdue(venceuOntem, hoje), true);
+}
 
 console.log(fails === 0 ? "\n>>> TODOS PASSARAM\n" : `\n>>> ${fails} FALHA(S)\n`);
 process.exit(fails === 0 ? 0 : 1);

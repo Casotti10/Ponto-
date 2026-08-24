@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { ledgerDayFromISO, parseAmountToCents } from "@/lib/ledger-calc";
+import { appDateString } from "@/lib/timezone";
 import {
   accountSchema,
   categorySchema,
@@ -30,6 +31,8 @@ import type { FormResult } from "@/lib/actions/time-entries";
 function revalidateLedger() {
   revalidatePath("/financeiro");
   revalidatePath("/financeiro/geral");
+  revalidatePath("/financeiro/a-pagar");
+  revalidatePath("/financeiro/a-receber");
 }
 
 /* ------------------------------ Lançamentos ------------------------------ */
@@ -437,6 +440,80 @@ export async function deleteRecurringTransaction(id: string): Promise<FormResult
     action: "DELETE",
     before: { description: existing.description, amountCents: existing.amountCents },
     reason: "Exclusão de lançamento recorrente",
+  });
+
+  revalidateLedger();
+  return { success: true };
+}
+
+/* ---------------------------- Baixa de conta ----------------------------- */
+
+/**
+ * Marca um lançamento como liquidado — a "baixa" feita direto na lista de
+ * contas a pagar/receber, sem abrir o formulário.
+ *
+ * `settledOn` em `yyyy-MM-dd`; ausente significa hoje no fuso do app. A data
+ * importa: pagar hoje uma conta que venceu semana passada registra o pagamento
+ * de hoje, não o vencimento.
+ */
+export async function settleTransaction(id: string, settledOn?: string): Promise<FormResult> {
+  const user = await requireUser();
+
+  const existing = await prisma.transaction.findFirst({ where: { id, userId: user.id } });
+  if (!existing) return { success: false, error: "Lançamento não encontrado" };
+  if (existing.status === "LIQUIDADO") return { success: false, error: "Este lançamento já está liquidado" };
+  if (existing.status === "CANCELADO") {
+    return { success: false, error: "Um lançamento cancelado não pode ser liquidado" };
+  }
+
+  const updated = await prisma.transaction.update({
+    where: { id },
+    data: {
+      status: "LIQUIDADO",
+      settledDate: ledgerDayFromISO(settledOn || appDateString()),
+    },
+  });
+
+  await logAudit({
+    userId: user.id,
+    entity: "TRANSACTION",
+    entityId: id,
+    action: "UPDATE",
+    before: { status: existing.status, settledDate: existing.settledDate },
+    after: { status: updated.status, settledDate: updated.settledDate },
+    reason: "Baixa de lançamento",
+  });
+
+  revalidateLedger();
+  return { success: true };
+}
+
+/**
+ * Desfaz a baixa. Existe porque errar o botão numa lista é fácil, e a
+ * alternativa seria editar o lançamento inteiro para corrigir um clique.
+ */
+export async function unsettleTransaction(id: string): Promise<FormResult> {
+  const user = await requireUser();
+
+  const existing = await prisma.transaction.findFirst({ where: { id, userId: user.id } });
+  if (!existing) return { success: false, error: "Lançamento não encontrado" };
+  if (existing.status !== "LIQUIDADO") return { success: false, error: "Este lançamento não está liquidado" };
+
+  await prisma.transaction.update({
+    where: { id },
+    // A data de liquidação sai junto: manter uma data de pagamento num
+    // lançamento pendente é a contradição que a action de gravação já evita.
+    data: { status: "PENDENTE", settledDate: null },
+  });
+
+  await logAudit({
+    userId: user.id,
+    entity: "TRANSACTION",
+    entityId: id,
+    action: "UPDATE",
+    before: { status: "LIQUIDADO", settledDate: existing.settledDate },
+    after: { status: "PENDENTE", settledDate: null },
+    reason: "Baixa desfeita",
   });
 
   revalidateLedger();

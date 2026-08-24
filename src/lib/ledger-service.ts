@@ -4,6 +4,7 @@ import {
   buildDailyFlow,
   computeAccountBalancesFromTotals,
   isCancelled,
+  ledgerDayFromWallClock,
   isOverdue,
   isSettled,
   isTransfer,
@@ -374,7 +375,10 @@ export async function getMonthlyLedger(
     color: c.color,
   }));
 
-  const totals = summarizeTransactions(transactions, referenceDate);
+  // `referenceDate` chega como relógio de parede do fuso do app; as datas do
+  // banco estão no dia contábil. A conversão acontece aqui, uma vez.
+  const todayLedger = ledgerDayFromWallClock(referenceDate);
+  const totals = summarizeTransactions(transactions, todayLedger);
 
   const allAccounts = computeAccountBalancesFromTotals(
     accountRows.map((a) => ({
@@ -631,7 +635,7 @@ export async function getLedgerHistory(
     }
 
     const settled = isSettled(row);
-    const overdue = isOverdue(row, referenceDate);
+    const overdue = isOverdue(row, ledgerDayFromWallClock(referenceDate));
 
     if (row.type === "ENTRADA") {
       if (settled) {
@@ -708,5 +712,167 @@ export async function getLedgerHistory(
       type: c.type,
       color: c.color,
     })),
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/*                        CONTAS A PAGAR / A RECEBER                          */
+/* -------------------------------------------------------------------------- */
+
+export type BillFilter =
+  | "todas"
+  | "pendentes"
+  | "liquidadas"
+  | "vencidas"
+  | "hoje"
+  | "proximos7"
+  | "proximos30";
+
+export interface BillsIndicators {
+  /** Tudo que ainda não foi liquidado, vencido ou não. */
+  pendingCents: number;
+  pendingCount: number;
+  overdueCents: number;
+  overdueCount: number;
+  dueTodayCents: number;
+  dueTodayCount: number;
+  next7Cents: number;
+  next7Count: number;
+}
+
+export interface BillsView {
+  type: "ENTRADA" | "SAIDA";
+  filter: BillFilter;
+  transactions: LedgerTransaction[];
+  indicators: BillsIndicators;
+  accounts: AccountBalance[];
+  categories: LedgerCategory[];
+}
+
+/** Dia contábil somado de N dias. */
+function addLedgerDays(day: Date, days: number): Date {
+  return new Date(day.getTime() + days * 86_400_000);
+}
+
+/**
+ * Contas a pagar (`SAIDA`) ou a receber (`ENTRADA`).
+ *
+ * Os INDICADORES do topo somam sempre o pipeline inteiro em aberto, mesmo
+ * quando a lista está filtrada. É de propósito: filtrar por "vence hoje" não
+ * pode fazer o total a pagar encolher, senão o número que a pessoa usa para
+ * decidir muda conforme o que ela está olhando.
+ *
+ * Transferência fica fora dos dois — mover dinheiro entre contas próprias não é
+ * conta a pagar nem a receber.
+ */
+export async function getBills(
+  userId: string,
+  type: "ENTRADA" | "SAIDA",
+  filter: BillFilter = "pendentes",
+  referenceDate: Date = new Date()
+): Promise<BillsView> {
+  await ensureLedgerBootstrap(userId);
+
+  const today = ledgerDayFromWallClock(referenceDate);
+  const in7 = addLedgerDays(today, 7);
+  const in30 = addLedgerDays(today, 30);
+
+  const emAberto = { in: ["PENDENTE", "AGENDADO"] as TransactionStatusLike[] };
+  const base = { userId, type, transferGroupId: null, status: { not: "CANCELADO" as const } };
+
+  // O recorte da LISTA. Cada opção vira cláusula do Prisma — nada é filtrado
+  // depois de carregado.
+  const listWhere = (() => {
+    switch (filter) {
+      case "pendentes":
+        return { ...base, status: emAberto };
+      case "liquidadas":
+        return { ...base, status: "LIQUIDADO" as const };
+      case "vencidas":
+        return { ...base, status: emAberto, dueDate: { lt: today } };
+      case "hoje":
+        return { ...base, status: emAberto, dueDate: { gte: today, lt: addLedgerDays(today, 1) } };
+      case "proximos7":
+        return { ...base, status: emAberto, dueDate: { gte: today, lte: in7 } };
+      case "proximos30":
+        return { ...base, status: emAberto, dueDate: { gte: today, lte: in30 } };
+      default:
+        return base;
+    }
+  })();
+
+  const [rows, pipeline, accountRows, categoryRows, balanceTotals] = await Promise.all([
+    prisma.transaction.findMany({
+      where: listWhere,
+      include: TRANSACTION_INCLUDE,
+      orderBy: [{ dueDate: "asc" }, { createdAt: "asc" }],
+      take: 300,
+    }),
+    // Linhas leves só para os indicadores: o pipeline em aberto inteiro.
+    prisma.transaction.findMany({
+      where: { ...base, status: emAberto },
+      select: { amountCents: true, dueDate: true, date: true, status: true },
+    }),
+    prisma.account.findMany({ where: { userId }, orderBy: { name: "asc" } }),
+    prisma.category.findMany({
+      where: { userId, archived: false, type },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true, type: true, color: true },
+    }),
+    prisma.transaction.groupBy({
+      by: ["accountId", "type"],
+      where: { userId, status: "LIQUIDADO" },
+      _sum: { amountCents: true },
+      _count: { _all: true },
+    }),
+  ]);
+
+  const indicators: BillsIndicators = {
+    pendingCents: 0,
+    pendingCount: 0,
+    overdueCents: 0,
+    overdueCount: 0,
+    dueTodayCents: 0,
+    dueTodayCount: 0,
+    next7Cents: 0,
+    next7Count: 0,
+  };
+
+  for (const row of pipeline) {
+    const due = row.dueDate ?? row.date;
+    indicators.pendingCents += row.amountCents;
+    indicators.pendingCount++;
+
+    if (due.getTime() < today.getTime()) {
+      indicators.overdueCents += row.amountCents;
+      indicators.overdueCount++;
+    } else if (due.getTime() === today.getTime()) {
+      indicators.dueTodayCents += row.amountCents;
+      indicators.dueTodayCount++;
+    }
+
+    // "Próximos 7 dias" inclui hoje e exclui o que já venceu — é a janela de
+    // quem quer saber o que precisa resolver nesta semana.
+    if (due.getTime() >= today.getTime() && due.getTime() <= in7.getTime()) {
+      indicators.next7Cents += row.amountCents;
+      indicators.next7Count++;
+    }
+  }
+
+  return {
+    type,
+    filter,
+    transactions: rows.map(toLedgerTransaction),
+    indicators,
+    accounts: computeAccountBalancesFromTotals(
+      accountRows,
+      balanceTotals.map((row) => ({
+        accountId: row.accountId,
+        type: row.type,
+        amountCents: row._sum.amountCents ?? 0,
+        count: row._count._all,
+      }))
+    ),
+    categories: categoryRows,
   };
 }

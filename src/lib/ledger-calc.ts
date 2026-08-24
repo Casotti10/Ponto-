@@ -92,11 +92,17 @@ export function isTransfer(tx: Pick<TransactionLike, "transferGroupId">): boolea
  */
 export function isOverdue(
   tx: Pick<TransactionLike, "status" | "dueDate" | "date">,
+  /**
+   * Hoje JÁ NO DIA CONTÁBIL (meia-noite UTC), como as datas gravadas. Converta
+   * o "agora" do fuso do app com `ledgerDayFromWallClock` antes de passar —
+   * `appNow()` devolve relógio de parede local, e comparar as duas convenções
+   * direto marca conta como vencida um dia antes da hora.
+   */
   today: Date
 ): boolean {
   if ((tx.status ?? "LIQUIDADO") !== "PENDENTE") return false;
   const due = tx.dueDate ?? tx.date;
-  return due.getTime() < startOfLedgerDay(today).getTime();
+  return due.getTime() < today.getTime();
 }
 
 /** Entra no resultado do período (receitas − despesas). */
@@ -109,9 +115,26 @@ export function countsForBalance(tx: TransactionLike): boolean {
   return isSettled(tx) && !isCancelled(tx);
 }
 
-/** Meia-noite UTC do dia de uma data — mesma convenção de `ledgerDayFromISO`. */
+/**
+ * Meia-noite UTC do dia de uma data que JÁ ESTÁ na convenção contábil (gravada
+ * por `ledgerDayFromISO`). Lê com getters UTC porque é assim que ela foi
+ * escrita.
+ */
 export function startOfLedgerDay(date: Date): Date {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
+/**
+ * Converte o "agora" do fuso do app (`appNow()`, que devolve um Date cujos
+ * componentes LOCAIS são o relógio de parede do usuário) para o dia contábil.
+ *
+ * É a ponte entre as duas convenções de data do sistema, e ela precisa existir:
+ * `startOfLedgerDay` lê com getters UTC e produziria o dia errado aqui — numa
+ * máquina em São Paulo, depois das 21h o UTC já virou e uma conta que vence
+ * amanhã apareceria como vencida hoje.
+ */
+export function ledgerDayFromWallClock(instant: Date): Date {
+  return new Date(Date.UTC(instant.getFullYear(), instant.getMonth(), instant.getDate()));
 }
 
 /* ------------------------------ o dia contábil ----------------------------- */
@@ -223,7 +246,8 @@ export interface PeriodTotals {
  */
 export function summarizeTransactions(
   transactions: TransactionLike[],
-  today: Date = new Date()
+  /** Hoje no dia contábil — ver a nota em `isOverdue`. */
+  today: Date = ledgerDayFromWallClock(new Date())
 ): PeriodTotals {
   let incomeCents = 0;
   let expenseCents = 0;

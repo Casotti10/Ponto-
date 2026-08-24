@@ -32,7 +32,7 @@ import { StatCard } from "@/components/dashboard/stat-card";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { LedgerViewTabs } from "@/components/ledger/ledger-view-tabs";
+import { LedgerModuleNav, LedgerViewTabs } from "@/components/ledger/ledger-view-tabs";
 import { LedgerPeriodPicker } from "@/components/ledger/ledger-period-picker";
 import { AccountFilter } from "@/components/ledger/account-filter";
 import { MonthlySummary } from "@/components/ledger/monthly-summary";
@@ -175,6 +175,8 @@ export default async function FinanceiroPage({
           </TransactionFormDialog>
         </div>
       </div>
+
+      <LedgerModuleNav active="lancamentos" />
 
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <LedgerViewTabs active="mensal" overviewHref={`/financeiro/geral?${overviewQuery}`} />
